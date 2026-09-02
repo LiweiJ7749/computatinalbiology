@@ -5,21 +5,26 @@
 # 用途：在本地对比 SpaGCN 与 SpaSEG 两个深度学习模型的效果
 #
 # 冲突解决说明：
-#   1. torch  -> SpaSEG 锁定 ==1.12.0；SpaGCN 测试于 1.5~1.8（向后兼容）
-#               故统一为 torch==1.12.0（PyPI 默认 CPU 版）。
-#               CPU 版可避开 download.pytorch.org 网络问题，且本机
-#               RTX4060(sm_89) 也并非 cu113 构建的目标卡，CPU 训练足够。
+#   1. torch  -> 统一升级为 CUDA 版 torch 2.5.1+cu124，支持本机 RTX4060
+#               (Ada, sm_89)。注意：+cu124 构建不在普通 PyPI，PyPI/清华镜像
+#               默认给 CPU 版（torch==2.5.1+cpu）。必须从 PyTorch CUDA wheel
+#               镜像安装：
+#                 python -m pip install "torch==2.5.1+cu124" \
+#                     -f https://mirrors.aliyun.com/pytorch-wheels/cu124/
 #   2. scanpy -> SpaGCN 需 >1.5；SpaSEG 需 >=1.9.1 → 取 >=1.9.1
 #   3. numpy / numba -> squidpy 1.2.3 要求 numba>=0.55,<0.56 → 用 0.55.2；
 #               numba 0.55 需 numpy<1.23，故锁定 numpy==1.22.4
+#               （torch 2.5.1+cu124 的 numpy 约束与 1.22.4 兼容，未升级 numpy）
 #   4. louvain  -> SpaGCN 1.2.7 要求 louvain>=0.8.0；0.8.1 依赖新版
 #               igraph>=0.10,<0.11（替代旧 python-igraph），故不再锁旧包名
 #   5. cell2location -> 仅 SpaSEG 下游"细胞反卷积"分析需要，且依赖 jax
 #               （Windows 兼容差，是已知环境冲突源），默认注释，按需启用
+#   6. GPU 化：SpaGCN 使用本地补丁源码 env_spatial/SpaGCN_src（run 脚本
+#              通过 sys.path 优先加载），SpaSEG 原生支持 device 参数。
 # ============================================================
 
-# ---- 深度学习框架（统一到 SpaSEG 锁定的版本）----
-torch==1.12.0
+# ---- 深度学习框架（CUDA 版 torch，支持 RTX4060/Ada sm_89）----
+torch==2.5.1+cu124
 
 # ---- 数值 / 科学计算 ----
 # numpy 1.22.4：满足 numba 0.55（需 <1.23）与 SpaSEG 的 >=1.22.4

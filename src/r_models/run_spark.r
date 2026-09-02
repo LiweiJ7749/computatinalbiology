@@ -1,8 +1,10 @@
 # ============================================================
-# SPARK-X 方法：mouse_brain_STARmap 数据 SVG 检测
-# 输入：results/local_results/mouse_brain_STARmap/SPARK_X/ 下的中间文件
+# SPARK-X 方法：SVG 检测（批量化）
+# 输入：<data_dir> 下的中间文件（由 src/preprocess/h5ad_preprocess.py 生成）
 #       counts.mtx (genes x spots), genes.csv, barcodes.csv, location.csv
-# 输出：SVG_SPARK_mouse_brain_STARmap.csv + ggplot2 展示图
+# 输出：SVG_SPARK_<sample>.csv + ggplot2 展示图
+# 用法: Rscript run_spark.r <data_dir> [sample]
+#       sample 默认取 data_dir 上级目录名（如 mouse_brain_STARmap）
 # ============================================================
 suppressPackageStartupMessages({
   library(SPARK)
@@ -14,10 +16,13 @@ suppressPackageStartupMessages({
 args <- commandArgs(trailingOnly = TRUE)
 data_dir <- if (length(args) >= 1) args[1] else
   "F:/computatinalbiology/results/local_results/mouse_brain_STARmap/SPARK_X"
+sample <- if (length(args) >= 2) args[2] else
+  basename(dirname(normalizePath(data_dir, winslash = "/")))
 out_dir <- data_dir
 
 cat("===== SPARK-X: 读取中间文件 =====\n")
 cat("数据目录:", data_dir, "\n")
+cat("样本标签(sample):", sample, "\n")
 
 counts <- readMM(file.path(data_dir, "counts.mtx"))
 genes  <- read.csv(file.path(data_dir, "genes.csv"),  header = FALSE, stringsAsFactors = FALSE)[, 1]
@@ -67,7 +72,7 @@ res_df <- res_df[order(res_df$adjustedPval, res_df$combinedPval, na.last = TRUE)
 res_df$rank <- seq_len(nrow(res_df))
 
 # ---------- 保存 CSV ----------
-csv_path <- file.path(out_dir, "SVG_SPARK_mouse_brain_STARmap.csv")
+csv_path <- file.path(out_dir, sprintf("SVG_SPARK_%s.csv", sample))
 write.csv(res_df, csv_path, row.names = FALSE)
 cat("已保存结果:", csv_path, "\n")
 cat(sprintf("显著 SVG (adjustedPval < 0.05): %d / %d\n",
@@ -86,7 +91,7 @@ p <- ggplot(top_df, aes(x = gene, y = -log10(adjustedPval))) +
   theme_minimal(base_size = 11) +
   theme(plot.title = element_text(hjust = 0.5))
 
-png_path <- file.path(out_dir, "SVG_SPARK_mouse_brain_STARmap_top.png")
+png_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_top.png", sample))
 ggsave(png_path, p, width = 8, height = 6, dpi = 150)
 cat("已保存展示图:", png_path, "\n")
 

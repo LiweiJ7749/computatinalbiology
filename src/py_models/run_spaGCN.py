@@ -1,123 +1,189 @@
 # -*- coding: utf-8 -*-
 """
-run_spaGCN.py —— 在 mouse_brain_STARmap 数据上运行 SpaGCN 检测 SVG
+run_spaGCN.py —— SpaGCN 方法：SVG 检测（工程化/批量化版本）
+================================================================================
+设计（配合 src/__init__.py 的初始化模块）：
+  1. 先解析 run 配置（src.resolve_run）：--dataset / --h5ad / --outdir / --sample
+  2. 输入优先取共同前处理生成的 <sample>_spaGCN.h5ad（X=原始 counts + obs x/y）；
+     若不存在（未先跑 init）则回退读原始 h5ad 并自动补 X=raw_count 与坐标。
+  3. 预处理（SpaGCN 默认/最简）：prefilter_genes + prefilter_specialgenes +
+     normalize_per_cell + log1p（在真实 counts 上做**单次**标准化）。
+  4. calculate_adj_matrix(histology=False) -> search_l -> search_res -> 训练(device)
+     -> predict + refine 平滑 -> 逐域 detect_SVGs_ez_mode。
+  5. 输出 SVG_spaGCN_<sample>.csv + 域划分图 + Top SVG 空间表达图。
 
-输入：data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad
-      （坐标位于 obsm["spatial"]，无组织学图像）
-输出目录：results/local_results/mouse_brain_STARmap/spaGCN/
-      - SVG_spaGCN_STARmap_Mouse_Brain.csv    : 每个空间域检测出的 SVG 及统计指标
-      - SVG_spaGCN_*.png                     : Top SVG 空间表达展示图
-      - domains_spaGCN_STARmap_Mouse_Brain.png: SpaGCN 空间域划分图
+深度学习设备：默认 auto（有 CUDA 用 GPU，否则 CPU+警告）；可用 --device 强制。
+SpaGCN 使用本地 GPU 补丁源码 env_spatial/SpaGCN_src（勿用 site-packages CPU 版）。
 
-流程（均为 SpaGCN 默认/最简参数）：
-  1. 预处理：prefilter_genes(min_cells=3) + normalize + log1p
-  2. 基于空间坐标（histology=False）计算邻接矩阵
-  3. search_l(p=0.5) 找超参数 l
-  4. search_res(target_num=n_clusters) 找聚类分辨率 res
-  5. SpaGCN 训练 + 预测空间域，并用 refine() 平滑（square 形状，适配非 Visium）
-  6. 对每个空间域用 detect_SVGs_ez_mode() 检测 SVG
-  7. 汇总为 CSV 并绘制 Top SVG 空间表达图
-
-用法（在项目根目录 F:\\computatinalbiology 下）:
-    F:/computatinalbiology/env_spatial/python.exe ./src/r_models/run_spaGCN.py
+用法（在项目根下，用 env_spatial 的 python）：
+    python src/py_models/run_spaGCN.py --dataset mouse_brain_STARmap
+    python src/py_models/run_spaGCN.py --h5ad ./data/.../x.h5ad --outdir ./results/local_results/my_run --sample my
 """
-import os
+import argparse
 import sys
+import time
 from pathlib import Path
 
-import anndata as ad
 import numpy as np
 import pandas as pd
-import scanpy as sc
 
-# 项目根目录（本文件位于 src/r_models/ 下，parents[2] = 项目根）
+import matplotlib
+matplotlib.use("Agg")
+
+# ---------------------------------------------------------------------------
+# 项目路径 & 引入 src 初始化模块（import 无副作用、开销低）
+# ---------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+import src  # noqa: E402
 
-H5AD_PATH = ROOT / "data" / "STARmap" / "mouse_brain_cortex" / "mouse_brain_STARmap_processed.h5ad"
-OUTDIR = ROOT / "results" / "local_results" / "mouse_brain_STARmap" / "spaGCN"
-SAMPLE_NAME = "STARmap_Mouse_Brain"
-
-# SpaGCN 默认/最简参数（来自 ez_mode）
-N_CLUSTERS = 9          # 空间域数量（与数据自带的 clusters 类别数一致）
-P = 0.5                 # search_l 的 p 参数（默认）
-HISTOLOGY = False       # STARmap 无组织学图像，仅用空间坐标建图
-COLOR_MAP = "viridis"   # SVG 展示图配色
+# 深度学习设备：要求 CUDA GPU（torch 需为 cu 构建）；SpaGCN_src 提供 device 参数
+DEVICE_DEFAULT = "auto"   # auto=有 GPU 用 cuda；否则 CPU 回退
 
 
-def main() -> None:
-    OUTDIR.mkdir(parents=True, exist_ok=True)
+def _resolve_inputs(args):
+    """解析 run 配置，返回 (adata路径, outdir, sample)。"""
+    run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
+                          spatial=args.spatial, outdir=args.outdir,
+                          sample=args.sample, methods=["spagcn"])
+    src.ensure_run_dirs(run)
+    outdir = run["method_dirs"]["spagcn"]
+    sample = run["sample"]
+    # 优先：共同前处理生成的 <sample>_spaGCN.h5ad（X=counts + obs x/y）
+    prepared = outdir / f"{sample}_spaGCN.h5ad"
+    h5ad_in = prepared if prepared.exists() else run["h5ad"]
+    if prepared.exists():
+        print(f"[run_spaGCN] 使用前处理产物: {prepared}")
+    else:
+        print(f"[run_spaGCN] 未发现 {prepared}，回退读原始 h5ad: {run['h5ad']}")
+    return h5ad_in, outdir, sample
 
-    print(f"[1/6] 读取 h5ad: {H5AD_PATH}")
-    adata = ad.read_h5ad(H5AD_PATH)
+
+def _pick_device(arg: str) -> str:
+    """选择训练设备：auto -> cuda 优先；显式 cuda 但无 GPU 则报错。"""
+    import torch
+
+    has_cuda = torch.cuda.is_available()
+    if arg == "auto":
+        dev = "cuda" if has_cuda else "cpu"
+        if not has_cuda:
+            print("[run_spaGCN] 警告：未检测到 CUDA，回退 CPU（会很慢）", flush=True)
+    else:
+        dev = arg
+    if dev == "cuda" and not has_cuda:
+        raise SystemExit("[run_spaGCN] --device cuda 但未检测到可用 CUDA GPU，"
+                         "请检查 nvidia-smi 与 torch 是否为 CUDA 版，或改用 --device auto/cpu。")
+    if has_cuda:
+        print(f"[run_spaGCN] 使用设备: cuda ({torch.cuda.get_device_name(0)})", flush=True)
+    return dev
+
+
+# ---------------------------------------------------------------------------
+# 读取 + 表达预处理（SpaGCN 默认流程）
+# ---------------------------------------------------------------------------
+def load_and_prepare(h5ad_in: Path, device: str):
+    import anndata as ad
+    import scanpy as sc
+
+    print(f"[1/6] 读取 h5ad: {h5ad_in}")
+    adata = ad.read_h5ad(h5ad_in)
     print(f"      shape = {adata.shape} (spots x genes)")
 
-    # 坐标：STARmap 的坐标在 obsm["spatial"]，列顺序为 [x, y]
-    spatial = np.asarray(adata.obsm["spatial"], dtype=float)
-    x_array = spatial[:, 0].tolist()
-    y_array = spatial[:, 1].tolist()
-    print(f"      坐标来源: obsm['spatial'], 形状 {spatial.shape}")
+    # 坐标列 x/y（SpaGCN 用于建邻接矩阵 / refine / 绘图）
+    if "x" not in adata.obs.columns or "y" not in adata.obs.columns:
+        print("      obs 无 x/y，从 obsm['spatial'] 派生")
+        coords = np.asarray(adata.obsm["spatial"], dtype=float)
+        adata.obs["x"] = coords[:, 0]
+        adata.obs["y"] = coords[:, 1]
+    x_array = adata.obs["x"].astype(float).tolist()
+    y_array = adata.obs["y"].astype(float).tolist()
 
-    # ---------- 1) 预处理（与官方教程一致的默认流程） ----------
-    print("[2/6] 预处理（prefilter_genes + normalize + log1p）")
+    # X 统一为真实 counts（若存在 raw_count 层），再做单次 normalize+log1p
+    if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
+        adata.X = adata.layers["raw_count"].copy()
+        print("      X <- layers['raw_count']（真实 counts）")
+
+    print("[2/6] 预处理（prefilter + normalize + log1p）")
     adata.var_names_make_unique()
-    SpaGCN_util_prefilter_genes(adata, min_cells=3)   # 去除在 <3 个 spot 表达的基因
-    SpaGCN_util_prefilter_specialgenes(adata)         # 去除 ERCC / MT- 开头基因
+    _prefilter_genes(adata, min_cells=3)
+    _prefilter_specialgenes(adata)
     sc.pp.normalize_per_cell(adata)
     sc.pp.log1p(adata)
     print(f"      预处理后 shape = {adata.shape}")
+    return adata, x_array, y_array, device
 
-    # ---------- 2) 计算邻接矩阵（无组织学图像） ----------
-    print("[3/6] 计算邻接矩阵（histology=False，仅用空间坐标）")
+
+def _prefilter_genes(adata, min_cells=3):
+    from SpaGCN.util import prefilter_genes
+
+    prefilter_genes(adata, min_cells=min_cells)
+
+
+def _prefilter_specialgenes(adata):
+    from SpaGCN.util import prefilter_specialgenes
+
+    prefilter_specialgenes(adata)
+
+
+# ---------------------------------------------------------------------------
+# 聚类
+# ---------------------------------------------------------------------------
+def train_domains(adata, x_array, y_array, device, n_clusters: int):
+    import scanpy as sc
+    from SpaGCN import SpaGCN
     from SpaGCN.calculate_adj import calculate_adj_matrix
-    adj = calculate_adj_matrix(x=x_array, y=y_array, histology=HISTOLOGY)
-    print(f"      adj 形状 = {adj.shape}")
-
-    # ---------- 3) 搜索超参数 l ----------
-    print("[4/6] 搜索 l 与 res")
     from SpaGCN.util import search_l, search_res
-    l = search_l(p=P, adj=adj)
+
+    print("[3/6] 计算邻接矩阵 (histology=False) + 搜索超参 l / res")
+    adj = calculate_adj_matrix(x=x_array, y=y_array, histology=False)
+    l = search_l(p=0.5, adj=adj)
     print(f"      l = {l}")
 
-    # ---------- 4) 搜索聚类分辨率 res 并训练 ----------
-    res = search_res(adata, adj, l, target_num=N_CLUSTERS)
+    # 目标域数：优先 --n-clusters；其次 h5ad 自带 clusters 类别数；默认 9
+    if n_clusters is None:
+        if "clusters" in adata.obs.columns:
+            n_clusters = adata.obs["clusters"].nunique()
+        else:
+            n_clusters = 9
+    print(f"      target_num(clusters) = {n_clusters}")
+    res = search_res(adata, adj, l, target_num=n_clusters)
     print(f"      res = {res}")
 
-    print("[5/6] SpaGCN 训练 + 预测空间域")
-    from SpaGCN import SpaGCN
+    print("[4/6] SpaGCN 训练 + 预测 + refine")
     clf = SpaGCN()
     clf.set_l(l)
-    clf.train(adata, adj, init_spa=True, init="louvain", res=res, tol=5e-3, lr=0.05, max_epochs=200)
+    clf.train(adata, adj, init_spa=True, init="louvain", res=res,
+              tol=5e-3, lr=0.05, max_epochs=200, device=device)
     y_pred, prob = clf.predict()
-    adata.obs["pred"] = y_pred.astype(str)
+    adata.obs["pred"] = np.asarray(y_pred).astype(str)
 
-    # 平滑（STARmap 非六边形排布，用 square 形状）
+    from SpaGCN.calculate_adj import calculate_adj_matrix as calc_adj2d
     from SpaGCN.util import refine
-    from SpaGCN.calculate_adj import calculate_adj_matrix as _calc_adj2d
-    adj_2d = _calc_adj2d(x=x_array, y=y_array, histology=False)
+
+    adj_2d = calc_adj2d(x=x_array, y=y_array, histology=False)
     refined = refine(sample_id=adata.obs.index.tolist(), pred=adata.obs["pred"].tolist(),
                      dis=adj_2d, shape="square")
-    adata.obs["refined_pred"] = refined
-    adata.obs["refined_pred"] = adata.obs["refined_pred"].astype(str)
-
+    adata.obs["refined_pred"] = np.asarray(refined).astype(str)
     domains = sorted(adata.obs["refined_pred"].unique())
-    print(f"      空间域数量 = {len(domains)}: {domains}")
+    print(f"      空间域数量 = {len(domains)}")
+    return adata, domains
 
-    # ---------- 5) 检测每个域的 SVG ----------
-    print("[6/6] 逐空间域检测 SVG")
+
+# ---------------------------------------------------------------------------
+# SVG 检测 + 保存 + 绘图
+# ---------------------------------------------------------------------------
+def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     from SpaGCN.ez_mode import detect_SVGs_ez_mode, plot_spatial_domains_ez_mode
 
-    x_name = "x"
-    y_name = "y"
-    adata.obs[x_name] = x_array
-    adata.obs[y_name] = y_array
+    print("[5/6] 逐空间域检测 SVG")
+    import scanpy as sc
 
-    # 域划分展示图
     plot_spatial_domains_ez_mode(
         adata, domain_name="refined_pred", x_name=x_name, y_name=y_name,
         plot_color=sc.pl.palettes.default_102, size=40,
-        save_dir=str(OUTDIR / f"domains_spaGCN_{SAMPLE_NAME}.png"))
+        save_dir=str(outdir / f"domains_spaGCN_{sample}.png"))
 
-    # 对每个域检测 SVG（默认阈值）
     all_svg = []
     for dom in domains:
         try:
@@ -135,57 +201,67 @@ def main() -> None:
     if all_svg:
         svg_df = pd.concat(all_svg, ignore_index=True)
     else:
-        svg_df = pd.DataFrame(
-            columns=["genes", "in_group_fraction", "out_group_fraction",
-                     "in_out_group_ratio", "in_group_mean_exp", "out_group_mean_exp",
-                     "fold_change", "pvals_adj", "target_dmain", "neighbors", "domain"])
-
-    csv_path = OUTDIR / f"SVG_spaGCN_{SAMPLE_NAME}.csv"
+        svg_df = pd.DataFrame()
+    csv_path = outdir / f"SVG_spaGCN_{sample}.csv"
     svg_df.to_csv(csv_path, index=False)
     print(f"      已保存 SVG 结果: {csv_path} ({len(svg_df)} 条记录)")
-
-    # ---------- 6) 绘制 Top SVG 空间表达图 ----------
-    if len(svg_df) > 0:
-        top_genes = svg_df.sort_values("pvals_adj")["genes"].head(6).tolist()
-        print(f"      Top SVG 基因: {top_genes}")
-        # 注：官方 plot_SVGs_ez_mode 在新版 scipy/pandas 下有稀疏矩阵赋值 bug，
-        # 这里自定义绘图逻辑，等价实现（每个基因一张空间散点图）。
-        plot_top_svgs(adata, top_genes, x_name, y_name, COLOR_MAP, OUTDIR, SAMPLE_NAME)
-        print(f"      已保存 Top SVG 空间表达图到 {OUTDIR}")
-
-    print("===== run_spaGCN 完成 =====")
+    return svg_df
 
 
-def plot_top_svgs(adata, gene_list, x_name, y_name, color_map, outdir, sample_name):
-    """绘制 Top SVG 基因的空间表达图（绕开官方 ez_mode 的稀疏矩阵 bug）。"""
+def plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample, top_n=6):
+    """Top SVG 基因空间表达图（绕开官方 ez_mode 稀疏矩阵 bug，等价实现）。"""
     import matplotlib.pyplot as plt
+    import scanpy as sc
 
-    for g in gene_list:
-        # 稀疏列转 dense 一维数组（等价官方 adata.obs["exp"] 的意图）
+    if svg_df is None or len(svg_df) == 0:
+        print("      无 SVG 记录，跳过 Top 绘图")
+        return
+    gene_col = "genes" if "genes" in svg_df.columns else svg_df.columns[0]
+    top = svg_df.sort_values("pvals_adj")[gene_col].head(top_n).tolist()
+    print(f"      Top SVG 基因: {top}")
+    for g in top:
         col = adata.X[:, adata.var.index == g]
-        if hasattr(col, "toarray"):
-            expr = np.asarray(col.toarray()).ravel()
-        else:
-            expr = np.asarray(col).ravel()
+        expr = np.asarray(col.toarray()).ravel() if hasattr(col, "toarray") else np.asarray(col).ravel()
         tmp = adata.copy()
         tmp.obs["exp"] = expr
         fig = sc.pl.scatter(tmp, alpha=1, x=x_name, y=y_name, color="exp",
-                            title=g, color_map=color_map, show=False, size=40)
+                            title=g, color_map="viridis", show=False, size=40)
         fig.set_aspect("equal", "box")
         fig.axes.invert_yaxis()
-        fig.figure.savefig(str(outdir / f"SVG_spaGCN_{sample_name}_{g}.png"), dpi=600)
+        fig.figure.savefig(str(outdir / f"SVG_spaGCN_{sample}_{g}.png"), dpi=300)
         plt.close(fig.figure)
+    print(f"      已保存 Top SVG 空间表达图到 {outdir}")
 
 
-# 延迟导入 SpaGCN 工具函数（避免未使用时加载 torch）
-def SpaGCN_util_prefilter_genes(adata, min_cells=3):
-    from SpaGCN.util import prefilter_genes
-    prefilter_genes(adata, min_cells=min_cells)
+def main():
+    ap = argparse.ArgumentParser(description="SpaGCN SVG 检测 (batch)")
+    ap.add_argument("--dataset", default=None, help="dataset key")
+    ap.add_argument("--h5ad", default=None, help="输入 h5ad（绝对或相对项目根）")
+    ap.add_argument("--spatial", default=None, help="可选坐标文件")
+    ap.add_argument("--outdir", default=None, help="输出根目录")
+    ap.add_argument("--sample", default=None, help="样本标签（默认 dataset）")
+    ap.add_argument("--device", default=DEVICE_DEFAULT, choices=["auto", "cuda", "cpu"])
+    ap.add_argument("--n-clusters", type=int, default=None, help="目标空间域数")
+    args = ap.parse_args()
 
+    t_start = time.time()
+    h5ad_in, outdir, sample = _resolve_inputs(args)
+    device = _pick_device(args.device)
 
-def SpaGCN_util_prefilter_specialgenes(adata):
-    from SpaGCN.util import prefilter_specialgenes
-    prefilter_specialgenes(adata)
+    # 让 SpaGCN 源码可被 import（本地 GPU 补丁版）
+    spagcn_src = ROOT / "env_spatial" / "SpaGCN_src"
+    if str(spagcn_src) not in sys.path:
+        sys.path.insert(0, str(spagcn_src))
+
+    adata, x_array, y_array, device = load_and_prepare(h5ad_in, device)
+    adata, domains = train_domains(adata, x_array, y_array, device, args.n_clusters)
+
+    # 坐标列作为绘图用 x_name/y_name
+    x_name, y_name = "x", "y"
+    svg_df = detect_and_save(adata, domains, x_name, y_name, outdir, sample)
+    print("[6/6] 绘制 Top SVG 空间表达图")
+    plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample)
+    print(f"===== run_spaGCN 完成, 总耗时 {time.time() - t_start:.1f}s =====")
 
 
 if __name__ == "__main__":

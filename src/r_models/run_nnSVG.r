@@ -69,16 +69,10 @@ saveRDS(spe, rds_path)
 cat("已保存中间对象:", rds_path, "\n")
 
 # ---------- 运行 nnSVG ----------
-cat("===== 运行 nnSVG =====\n")
+cat("===== 运行 nnSVG (串行) =====\n")
 set.seed(123)
 t0 <- Sys.time()
-
-# Windows 下 MulticoreParam(即 fork) 不可用，nnSVG 内部的默认参数会静默退化为串行。
-# 必须显式传入 SnowParam(PSOCK 多进程) 才能真正并行。
-bp <- SnowParam(workers = n_threads, type = "SOCK",
-                progressbar = FALSE, RNGseed = 123)
-cat("使用 BiocParallel 后端:", class(bp)[1], " workers =", bpworkers(bp), "\n")
-spe <- nnSVG(spe, BPPARAM = bp, verbose = FALSE)
+spe <- nnSVG(spe, verbose = FALSE)   # 默认 SerialParam
 t1 <- Sys.time()
 cat(sprintf("nnSVG 运行耗时: %.2f 分钟\n", as.numeric(difftime(t1, t0, units = "mins"))))
 

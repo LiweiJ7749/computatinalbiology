@@ -1,8 +1,8 @@
 # ============================================================
-# nnSVG 方法：Visium Mouse Olfactory Bulb 数据 SVG 检测
-# 输入：results/local_results/Visium_Mouse_Olfactory_Bulb/nnSVG/ 下的中间文件
+# nnSVG 方法：mouse_brain_STARmap 数据 SVG 检测
+# 输入：results/local_results/mouse_brain_STARmap/nnSVG/ 下的中间文件
 #       counts.mtx (genes x spots), genes.csv, barcodes.csv, location.csv
-# 输出：SVG_nnSVG_Visium_Mouse_Olfactory_Bulb.csv + ggplot2 展示图
+# 输出：SVG_nnSVG_mouse_brain_STARmap.csv + ggplot2 展示图
 #       nnSVG_spe.rds (SpatialExperiment 中间对象，便于调试)
 # ============================================================
 suppressPackageStartupMessages({
@@ -19,7 +19,7 @@ suppressPackageStartupMessages({
 # ---------- 路径 ----------
 args <- commandArgs(trailingOnly = TRUE)
 data_dir <- if (length(args) >= 1) args[1] else
-  "F:/computatinalbiology/results/local_results/Visium_Mouse_Olfactory_Bulb/nnSVG"
+  "F:/computatinalbiology/results/local_results/mouse_brain_STARmap/nnSVG"
 n_threads <- if (length(args) >= 2) as.integer(args[2]) else 14
 out_dir <- data_dir
 
@@ -92,7 +92,7 @@ res_df <- res_df[order(res_df$padj, -res_df$LR_stat, na.last = TRUE), ]
 res_df$rank <- seq_len(nrow(res_df))
 
 # ---------- 保存 CSV ----------
-csv_path <- file.path(out_dir, "SVG_nnSVG_Visium_Mouse_Olfactory_Bulb.csv")
+csv_path <- file.path(out_dir, "SVG_nnSVG_mouse_brain_STARmap.csv")
 write.csv(res_df, csv_path, row.names = FALSE)
 cat("已保存结果:", csv_path, "\n")
 cat(sprintf("显著 SVG (padj < 0.05): %d / %d\n",
@@ -107,12 +107,12 @@ top_df$gene <- factor(top_df$gene, levels = rev(top_df$gene))
 p1 <- ggplot(top_df, aes(x = gene, y = -log10(padj))) +
   geom_col(fill = "darkgreen") +
   coord_flip() +
-  labs(title = "nnSVG: Top SVG genes (Visium Mouse Olfactory Bulb)",
+  labs(title = "nnSVG: Top SVG genes (mouse_brain_STARmap)",
        x = "Gene", y = "-log10(adjusted P-value)") +
   theme_minimal(base_size = 11) +
   theme(plot.title = element_text(hjust = 0.5))
 
-png1 <- file.path(out_dir, "SVG_nnSVG_Visium_Mouse_Olfactory_Bulb_top.png")
+png1 <- file.path(out_dir, "SVG_nnSVG_mouse_brain_STARmap_top.png")
 ggsave(png1, p1, width = 8, height = 6, dpi = 150)
 cat("已保存展示图:", png1, "\n")
 
@@ -138,7 +138,7 @@ p2 <- ggplot(df, aes(x = x, y = y, color = expr)) +
         axis.text = element_blank(),
         axis.ticks = element_blank())
 
-png2 <- file.path(out_dir, "SVG_nnSVG_Visium_Mouse_Olfactory_Bulb_top1_spatial.png")
+png2 <- file.path(out_dir, "SVG_nnSVG_mouse_brain_STARmap_top1_spatial.png")
 ggsave(png2, p2, width = 7, height = 6, dpi = 150)
 cat("已保存空间表达图:", png2, "\n")
 

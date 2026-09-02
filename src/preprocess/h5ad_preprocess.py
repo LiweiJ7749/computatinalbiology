@@ -5,20 +5,21 @@ h5ad_preprocess.py —— 统一的空间转录组数据预处理脚本（合并
 将此前散落在多个 py 脚本中的预处理逻辑合并为一个入口，供后续管道化、
 批量化调用。核心职责：
 
-  1. 统一读入 Visium 数据集的 .h5ad 文件；
+  1. 统一读入 Visium / STARmap 等平台的 .h5ad 文件；
   2. 生成 SPARK-X / nnSVG 两个 R 方法**直接可用**的数据类型：
        counts.mtx  (genes x spots，MatrixMarket，原始 counts)
        genes.csv   (基因 symbol，一列、无表头)
        barcodes.csv(spot barcode，一列、无表头)
-       location.csv(x = pxl_col_in_fullres, y = pxl_row_in_fullres，行名=barcode)
+       location.csv(x / y 空间坐标，行名=barcode)
   3. 留出两个 Python 方法（SpaGCN / SpaSEG）的 h5ad 预处理接口：
-       - SpaGCN：写 h5ad 副本 + obs 坐标列(x_array/y_array/x_pixel/y_pixel) + 组织学图像
+       - SpaGCN：写 h5ad 副本 + obs 坐标列(x_array/y_array/x_pixel/y_pixel) + 组织学图像（可选）
        - SpaSEG：写 h5ad 副本 + obsm["spatial"] 坐标
 
 坐标来源（按优先级）：
   1) --spatial 指定的文件（tissue_positions.csv 或 spatial.tar.gz）；
   2) results/local_results/spatial/tissue_positions.csv（已解压的坐标表）；
-  3) 与 .h5ad 同目录下的 *_spatial.tar.gz（10x 官方下载包，自动解压读取）。
+  3) 与 .h5ad 同目录下的 *_spatial.tar.gz（10x 官方下载包，自动解压读取）；
+  4) h5ad.obsm["spatial"]（STARmap 等非 Visium 平台的坐标）。
 
 用法（在项目根目录 F:\\computatinalbiology 下）:
     # 默认：对 Visium_Mouse_Olfactory_Bulb 跑全部四项预处理
@@ -32,6 +33,12 @@ h5ad_preprocess.py —— 统一的空间转录组数据预处理脚本（合并
         --h5ad ./data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb.h5ad \
         --spatial ./results/local_results/spatial/tissue_positions.csv \
         --outdir ./results/local_results/Visium_Mouse_Olfactory_Bulb
+
+    # STARmap 小数据（坐标自动取自 obsm["spatial"]），只生成 R 方法数据
+    python ./src/preprocess/h5ad_preprocess.py \
+        --h5ad ./data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad \
+        --outdir ./results/local_results/mouse_brain_STARmap \
+        --methods spark nnsvg
 """
 import argparse
 import io
@@ -56,6 +63,10 @@ RESULTS_DIR = ROOT / "results" / "local_results"
 DEFAULT_H5AD = DATA_DIR / "Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb.h5ad"
 DEFAULT_SPATIAL_TGZ = DATA_DIR / "Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb_spatial.tar.gz"
 DEFAULT_OUTDIR = RESULTS_DIR / "Visium_Mouse_Olfactory_Bulb"
+
+# STARmap 小数据集（坐标位于 obsm["spatial"]，适合快速测试）
+STARMAP_H5AD = DATA_DIR / "STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad"
+STARMAP_OUTDIR = RESULTS_DIR / "mouse_brain_STARmap"
 
 # 四种方法的输出子目录（与 results/local_results/Visium_Mouse_Olfactory_Bulb/ 对齐）
 SUBDIRS = {"spark": "SPARK_X", "nnsvg": "nnSVG", "spagcn": "spaGCN", "spaseg": "spaSEG"}
@@ -122,7 +133,11 @@ def _resolve_spatial(h5ad_path: Path, spatial_arg) -> tuple:
 
 
 def _load_coords(h5ad: ad.AnnData, spatial_arg) -> pd.DataFrame:
-    """读入坐标，并与 h5ad 的 obs.index 对齐（默认只保留 in_tissue=1 的 spot）。"""
+    """读入坐标并与 h5ad 的 obs.index 对齐，返回统一列结构的 DataFrame（索引=barcode）。
+
+    Visium：列含 x(=pxl_col_in_fullres)/y(=pxl_row_in_fullres)，若存在则保留 array_row/array_col；
+    STARmap 等：回退到 obsm["spatial"]，x/y 为空间坐标前两列。
+    """
     csv_path, tgz_path = _resolve_spatial(Path(h5ad.filename) if h5ad.filename else DEFAULT_H5AD,
                                           spatial_arg)
     tp = None
@@ -130,13 +145,25 @@ def _load_coords(h5ad: ad.AnnData, spatial_arg) -> pd.DataFrame:
         tp = _read_tissue_positions(csv_path)
     elif tgz_path is not None:
         tp = _read_tissue_positions(tgz_path)
-    if tp is None:
-        raise FileNotFoundError("找不到坐标来源（tissue_positions.csv 或 spatial.tar.gz）")
-    if "in_tissue" in tp.columns:
-        tp = tp[tp["in_tissue"] == 1]
-    # 仅保留 h5ad 中实际存在的 spot
-    tp = tp.loc[[b for b in h5ad.obs.index if b in tp.index]]
-    return tp
+
+    if tp is not None:
+        # Visium：默认只保留 in_tissue=1 的 spot，并统一列名
+        if "in_tissue" in tp.columns:
+            tp = tp[tp["in_tissue"] == 1]
+        tp = tp.loc[[b for b in h5ad.obs.index if b in tp.index]]
+        if "pxl_col_in_fullres" in tp.columns and "pxl_row_in_fullres" in tp.columns:
+            tp = tp.rename(columns={"pxl_col_in_fullres": "x", "pxl_row_in_fullres": "y"})
+        # 若坐标表与 h5ad barcode 无交集（如 STARmap 误命中 Visium 全局坐标表），
+        # 则回退到 obsm["spatial"]，避免对齐后为空
+        if len(tp) > 0:
+            return tp
+
+    # STARmap 等非 Visium 平台：直接用 obsm["spatial"]
+    if "spatial" in h5ad.obsm and h5ad.obsm["spatial"] is not None:
+        coords = np.asarray(h5ad.obsm["spatial"], dtype=float)
+        return pd.DataFrame(coords[:, :2], index=h5ad.obs.index, columns=["x", "y"])
+
+    raise FileNotFoundError("找不到坐标来源（tissue_positions.csv / spatial.tar.gz / obsm['spatial']）")
 
 
 # ----------------------------------------------------------------------
@@ -170,8 +197,8 @@ def export_r_format(h5ad: ad.AnnData, tp: pd.DataFrame, outdir: Path) -> None:
     pd.Series(barcodes).to_csv(outdir / "barcodes.csv", index=False, header=False)
 
     loc = pd.DataFrame({
-        "x": tp_aligned["pxl_col_in_fullres"].values,
-        "y": tp_aligned["pxl_row_in_fullres"].values,
+        "x": tp_aligned["x"].values,
+        "y": tp_aligned["y"].values,
     }, index=barcodes)
     loc.to_csv(outdir / "location.csv", index_label="barcode")
 
@@ -203,10 +230,15 @@ def prepare_spagcn(h5ad: ad.AnnData, tp: pd.DataFrame, img, outdir: Path,
     barcodes = list(adata.obs.index)
     tp_aligned = tp.loc[[b for b in barcodes if b in tp.index]]
 
-    adata.obs["x_array"] = tp_aligned["array_row"].astype(int).values
-    adata.obs["y_array"] = tp_aligned["array_col"].astype(int).values
-    adata.obs["x_pixel"] = tp_aligned["pxl_row_in_fullres"].astype(int).values
-    adata.obs["y_pixel"] = tp_aligned["pxl_col_in_fullres"].astype(int).values
+    adata.obs["x_pixel"] = tp_aligned["x"].astype(float).values
+    adata.obs["y_pixel"] = tp_aligned["y"].astype(float).values
+    if "array_row" in tp_aligned.columns and "array_col" in tp_aligned.columns:
+        adata.obs["x_array"] = tp_aligned["array_row"].astype(int).values
+        adata.obs["y_array"] = tp_aligned["array_col"].astype(int).values
+    else:
+        # 非 Visium 平台无 array_row/array_col，退化为像素坐标取整
+        adata.obs["x_array"] = tp_aligned["x"].astype(int).values
+        adata.obs["y_array"] = tp_aligned["y"].astype(int).values
 
     h5ad_out = outdir / f"{sample_name}_spaGCN.h5ad"
     adata.write(h5ad_out)
@@ -242,10 +274,10 @@ def prepare_spaseg(h5ad: ad.AnnData, tp: pd.DataFrame, outdir: Path,
     barcodes = list(adata.obs.index)
     tp_aligned = tp.loc[[b for b in barcodes if b in tp.index]]
 
-    # obsm["spatial"]：(n_spots, 2)，列分别为 x=pxl_col, y=pxl_row
+    # obsm["spatial"]：(n_spots, 2)，列为 x / y
     adata.obsm["spatial"] = np.column_stack([
-        tp_aligned["pxl_col_in_fullres"].astype(float).values,
-        tp_aligned["pxl_row_in_fullres"].astype(float).values,
+        tp_aligned["x"].astype(float).values,
+        tp_aligned["y"].astype(float).values,
     ]).astype(np.float32)
 
     h5ad_out = outdir / f"{sample_name}_spaSEG.h5ad"
@@ -269,8 +301,8 @@ def main() -> None:
     ap.add_argument("--methods", nargs="+", choices=["spark", "nnsvg", "spagcn", "spaseg"],
                     default=["spark", "nnsvg", "spagcn", "spaseg"],
                     help="要生成的数据（默认全部四项）")
-    ap.add_argument("--sample-name", type=str, default="Visium_Mouse_Olfactory_Bulb",
-                    help="样本名（用于 SpaGCN/SpaSEG 输出文件名前缀）")
+    ap.add_argument("--sample-name", type=str, default=None,
+                    help="样本名（用于 SpaGCN/SpaSEG 输出文件名前缀，默认取 h5ad 文件名）")
     args = ap.parse_args()
 
     # ---- 解析路径 ----
@@ -283,6 +315,7 @@ def main() -> None:
         print(f"ERROR: 找不到 h5ad 文件: {h5ad_path}")
         sys.exit(1)
     out_root = Path(args.outdir) if args.outdir else DEFAULT_OUTDIR
+    sample_name = args.sample_name or h5ad_path.stem
 
     # ---- 读取数据与坐标 ----
     print(f"[1/3] 读取 h5ad: {h5ad_path}")
@@ -317,9 +350,9 @@ def main() -> None:
         if m in ("spark", "nnsvg"):
             export_r_format(adata, tp, sub)
         elif m == "spagcn":
-            prepare_spagcn(adata, tp, img, sub, sample_name=args.sample_name)
+            prepare_spagcn(adata, tp, img, sub, sample_name=sample_name)
         elif m == "spaseg":
-            prepare_spaseg(adata, tp, sub, sample_name=args.sample_name)
+            prepare_spaseg(adata, tp, sub, sample_name=sample_name)
 
     print("===== h5ad_preprocess 完成 ✓ =====")
 

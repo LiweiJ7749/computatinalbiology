@@ -2,6 +2,7 @@
 # SPARK-X 方法：SVG 检测（批量化）
 # 输入：<data_dir> 下的中间文件（由 src/preprocess/h5ad_preprocess.py 生成）
 #       counts.mtx (genes x spots), genes.csv, barcodes.csv, location.csv
+#       location.csv 支持 2 列(x,y)或 3 列(x,y,z)；SPARK-X(locus 为 n x d) 天然支持 3D。
 # 输出：SVG_SPARK_<sample>.csv + ggplot2 展示图
 # 用法: Rscript run_spark.r <data_dir> [sample]
 #       sample 默认取 data_dir 上级目录名（如 mouse_brain_STARmap）
@@ -50,8 +51,8 @@ colnames(counts) <- barcodes
 # counts 为 dgCMatrix (genes x spots)，转成 sparseMatrix 供 sparkx
 counts <- as(counts, "sparseMatrix")
 
-# 坐标对齐：location.csv 行名即 barcode
-loc <- as.matrix(loc_df[barcodes, c("x", "y")])
+# 坐标对齐：location.csv 行名即 barcode；列全部取（2D: x,y；3D: x,y,z）
+loc <- as.matrix(loc_df[barcodes, , drop = FALSE])
 rownames(loc) <- barcodes
 
 cat(sprintf("counts 维度: %d genes x %d spots\n", nrow(counts), ncol(counts)))
@@ -65,9 +66,14 @@ if (length(mt_idx) != 0) {
 }
 
 # ---------- 运行 SPARK-X ----------
-log_step(1, 2, "运行 sparkx (mixture)")
+# 3D（location 列数 > 2：Slide-seq 切片堆叠 / Stereo-seq 三维）用投影核 option="single"：
+# mixture 的高斯/余弦核按 2D 连续坐标设计，对离散 z 轴（整数切片号）会退化
+# （余弦核 cos(2*pi*z/l) 别名 -> 常数列 -> crossprod 奇异），投影核 n x d 任意维均成立。
+loc_dim <- ncol(loc)
+option <- if (loc_dim > 2) "single" else "mixture"
+log_step(1, 2, sprintf("运行 sparkx (option=%s, loc=%dx%d)", option, nrow(loc), loc_dim))
 t0 <- Sys.time()
-res <- sparkx(counts, loc, numCores = 1, option = "mixture", verbose = FALSE)
+res <- sparkx(counts, loc, numCores = 1, option = option, verbose = FALSE)
 t1 <- Sys.time()
 wall_seconds <- as.numeric(difftime(t1, t0, units = "secs"))
 log_msg(sprintf("SPARK-X 运行耗时: %.1f 秒", wall_seconds))

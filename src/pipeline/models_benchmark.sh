@@ -141,22 +141,28 @@ fi
 [ -z "$METHODS" ] && { echo "[错误] 没有可运行的方法" >&2; exit 1; }
 log_msg "methods = $METHODS"
 
-# ---------------- 解析 run（outdir/sample 以 python src 为准） ----------------
-resolved="$("$PYTHON" - "$DATASET" "$OUTDIR_ARG" "$SAMPLE_ARG" "$H5AD" "$SPATIAL" 2>&1 <<'PY' || true
+# ---------------- 解析 run（outdir/sample/方法过滤以 python src 为准） ----------------
+# 用固定前缀标记输出行，避免 src.resolve_run 的日志污染解析（其 3D 跳过提示会打印到 stdout）。
+resolved="$("$PYTHON" - "$DATASET" "$OUTDIR_ARG" "$SAMPLE_ARG" "$H5AD" "$SPATIAL" "$METHODS" 2>&1 <<'PY' || true
 import os, sys
 sys.path.insert(0, os.environ["SVG_REPO_ROOT"])
 import src
-ds, out, sample, h5ad, spatial = (sys.argv[1], sys.argv[2], sys.argv[3],
-                                   sys.argv[4], sys.argv[5])
+ds, out, sample, h5ad, spatial, meth = (sys.argv[1], sys.argv[2], sys.argv[3],
+                                        sys.argv[4], sys.argv[5], sys.argv[6])
+meth_list = [m for m in meth.replace(',', ' ').split() if m]
 run = src.resolve_run(dataset=(ds or None), outdir=(out or None),
                       sample=(sample or None), h5ad=(h5ad or None),
-                      spatial=(spatial or None))
-print(run["outdir"])
-print(run["sample"])
+                      spatial=(spatial or None), methods=(meth_list or None))
+print("<<<RES>>>outdir=" + str(run["outdir"]))
+print("<<<RES>>>sample=" + str(run["sample"]))
+print("<<<RES>>>methods=" + " ".join(run["methods"]))
 PY
 )"
-OUTDIR_WIN="$(printf '%s\n' "$resolved" | sed -n '1p')"
-SAMPLE="$(printf '%s\n' "$resolved" | sed -n '2p')"
+OUTDIR_WIN="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>outdir=//p')"
+SAMPLE="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>sample=//p')"
+# 3D 数据集会在 resolve_run 内把方法过滤为仅 spark（4 方法中仅 SPARK-X 支持 3D）
+METHODS="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>methods=//p')"
+[ -z "$METHODS" ] && { echo "[错误] 请求方法与该数据集维度无交集（dim=3 仅支持 spark）" >&2; exit 1; }
 if [ -z "$OUTDIR_WIN" ] || [ -z "$SAMPLE" ]; then
   echo "[错误] 无法解析 run 配置（dataset=$DATASET）。" >&2
   echo "  - 请检查 src/__init__.py 的 DATASETS 是否含该 key，" >&2

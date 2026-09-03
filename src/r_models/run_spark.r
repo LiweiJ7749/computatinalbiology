@@ -51,7 +51,11 @@ if (length(mt_idx) != 0) {
 
 # ---------- 运行 SPARK-X ----------
 cat("===== 运行 sparkx (mixture) =====\n")
+t0 <- Sys.time()
 res <- sparkx(counts, loc, numCores = 1, option = "mixture", verbose = FALSE)
+t1 <- Sys.time()
+wall_seconds <- as.numeric(difftime(t1, t0, units = "secs"))
+cat(sprintf("SPARK-X 运行耗时: %.1f 秒\n", wall_seconds))
 
 # ---------- 汇总结果 ----------
 res_mtest <- res$res_mtest
@@ -77,6 +81,28 @@ write.csv(res_df, csv_path, row.names = FALSE)
 cat("已保存结果:", csv_path, "\n")
 cat(sprintf("显著 SVG (adjustedPval < 0.05): %d / %d\n",
             sum(res_df$adjustedPval < 0.05, na.rm = TRUE), nrow(res_df)))
+
+# ---------- 保存跨方法统一的排名 CSV（列固定: gene, stat, pval, padj, rank）----------
+# stat 取 -log10(combinedPval)（越大越显著）；p=0 下溢时封顶避免 Inf 导致跨语言读入不兼容。
+eval_df <- data.frame(
+  gene = res_df$gene,
+  stat = -log10(pmax(res_df$combinedPval, 1e-300)),
+  pval = res_df$combinedPval,
+  padj = res_df$adjustedPval,
+  rank = res_df$rank,
+  stringsAsFactors = FALSE
+)
+eval_df <- eval_df[order(eval_df$padj, -eval_df$stat, na.last = TRUE), ]
+eval_df$rank <- seq_len(nrow(eval_df))
+eval_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_rank.csv", sample))
+write.csv(eval_df, eval_path, row.names = FALSE)
+cat("已保存统一排名 CSV:", eval_path, "\n")
+
+# ---------- 保存运行时间（JSON，供 evaluation 汇总效率指标）----------
+rt_path <- file.path(out_dir, "runtime.json")
+writeLines(sprintf('{"method":"spark","sample":"%s","wall_seconds":%.2f}',
+                   sample, wall_seconds), rt_path)
+cat("已保存运行时间:", rt_path, "\n")
 
 # ---------- 展示图 ----------
 top_n <- 30

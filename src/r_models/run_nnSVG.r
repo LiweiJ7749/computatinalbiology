@@ -125,6 +125,28 @@ cat("已保存结果:", csv_path, "\n")
 cat(sprintf("显著 SVG (padj < 0.05): %d / %d\n",
             sum(res_df$padj < 0.05, na.rm = TRUE), nrow(res_df)))
 
+# ---------- 保存跨方法统一的排名 CSV（列固定: gene, stat, pval, padj, rank）----------
+# stat 取 LR_stat（越大越显著）；p=0 下溢时封顶避免 Inf 导致跨语言读入不兼容。
+eval_df <- data.frame(
+  gene = res_df$gene,
+  stat = res_df$LR_stat,
+  pval = res_df$pval,
+  padj = res_df$padj,
+  rank = res_df$rank,
+  stringsAsFactors = FALSE
+)
+eval_df <- eval_df[order(eval_df$padj, -eval_df$stat, na.last = TRUE), ]
+eval_df$rank <- seq_len(nrow(eval_df))
+eval_path <- file.path(out_dir, sprintf("SVG_nnSVG_%s_rank.csv", sample))
+write.csv(eval_df, eval_path, row.names = FALSE)
+cat("已保存统一排名 CSV:", eval_path, "\n")
+
+# ---------- 保存运行时间（JSON，供 evaluation 汇总效率指标）----------
+rt_path <- file.path(out_dir, "runtime.json")
+writeLines(sprintf('{"method":"nnsvg","sample":"%s","wall_seconds":%.2f}',
+                   sample, as.numeric(difftime(t1, t0, units = "secs"))), rt_path)
+cat("已保存运行时间:", rt_path, "\n")
+
 # ---------- 展示图 ----------
 # 1) Top SVG 的 -log10(padj) 柱状图
 top_n <- 30

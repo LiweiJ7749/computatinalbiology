@@ -276,6 +276,48 @@ def detect_svgs(adata):
 # ---------------------------------------------------------------------------
 # 4) 结果保存 + 绘图
 # ---------------------------------------------------------------------------
+def save_gene_ranking(_adata, outdir, sample, domain_labels="SpaSEG_clusters"):
+    """从 rank_genes_groups 结果提取全基因排名（列固定: gene, stat, pval, padj, rank）。
+
+    SpaSEG 的 detect_svg 内部已用 sc.tl.rank_genes_groups 对每个域算过全基因
+    wilcoxon padj（n_genes=全量）。全基因排名口径取每个基因在所有域中的最小
+    pvals_adj（越大越显著），stat = -log10(padj)。
+    """
+    rgg = _adata.uns.get("rank_genes_groups")
+    if rgg is None:
+        print("      未找到 rank_genes_groups，跳过全基因排名", flush=True)
+        return
+    domains = [d for d in rgg["names"].dtype.names]
+    gene_min = {}
+    gene_min_pval = {}
+    has_pvals = "pvals" in rgg and rgg["pvals"] is not None
+    for d in domains:
+        genes = rgg["names"][d].astype(str)
+        padjs = np.asarray(rgg["pvals_adj"][d], dtype=float)
+        pvals = (np.asarray(rgg["pvals"][d], dtype=float)
+                 if has_pvals else padjs)
+        for g, p, pv in zip(genes, padjs, pvals):
+            if not np.isfinite(p):
+                continue
+            if g not in gene_min or p < gene_min[g]:
+                gene_min[g] = p
+            if np.isfinite(pv) and (g not in gene_min_pval or pv < gene_min_pval[g]):
+                gene_min_pval[g] = pv
+    if not gene_min:
+        print("      全基因排名为空，跳过", flush=True)
+        return
+    rank_df = pd.DataFrame({"gene": list(gene_min.keys()),
+                            "padj": list(gene_min.values())})
+    rank_df["stat"] = -np.log10(rank_df["padj"].clip(lower=1e-300))
+    rank_df["pval"] = rank_df["gene"].map(gene_min_pval)
+    rank_df = rank_df.sort_values(["padj", "gene"]).reset_index(drop=True)
+    rank_df["rank"] = rank_df.index + 1
+    rank_df = rank_df[["gene", "stat", "pval", "padj", "rank"]]
+    rank_path = outdir / f"SVG_spaSEG_{sample}_rank.csv"
+    rank_df.to_csv(rank_path, index=False)
+    print(f"      已保存全基因排名: {rank_path} ({len(rank_df)} 个基因)", flush=True)
+
+
 def plot_domains(adata, outdir, sample):
     """空间域展示图。"""
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
@@ -361,11 +403,22 @@ def main():
     csv_path = outdir / f"SVG_spaSEG_{sample}.csv"
     svg_df.to_csv(csv_path, index=False)
     print(f"      已保存 SVG 结果: {csv_path} ({len(svg_df)} 条记录)", flush=True)
+    # 全基因排名（detect_svg 内部已算 rank_genes_groups，此处复用其结果）
+    save_gene_ranking(_adata, outdir, sample)
 
     # 6) 绘图
     print_header_step(6, 6, "绘制空间展示图")
     plot_domains(adata, outdir, sample)
     plot_top_svgs(adata, svg_df, outdir, sample)
+
+    # 保存运行时间（JSON，供 evaluation 汇总效率指标）
+    import json
+
+    rt_path = outdir / "runtime.json"
+    rt_path.write_text(json.dumps(
+        {"method": "spaseg", "sample": sample,
+         "wall_seconds": round(time.time() - t_start, 2)}))
+    print(f"      已保存运行时间: {rt_path}", flush=True)
 
     print(f"===== run_spaSEG 完成, 总耗时 {time.time() - t_start:.1f}s =====", flush=True)
 

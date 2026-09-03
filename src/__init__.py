@@ -60,6 +60,21 @@ MODEL_SCRIPTS = {
     "spaseg": SRC_DIR / "py_models" / "run_spaSEG.py",
 }
 
+# 统一方法颜色（ColorBrewer Set1 前四色，Python 绘图 / evaluation 使用；
+# R 脚本中无法 import 本模块，在脚本内硬编码同一组 hex 以保证跨语言一致）。
+METHOD_COLORS = {
+    "spark":  "#E41A1C",   # 红
+    "nnsvg":  "#377EB8",   # 蓝
+    "spagcn": "#4DAF4A",   # 绿
+    "spaseg": "#984EA3",   # 紫
+}
+METHOD_LABELS = {
+    "spark":  "SPARK-X",
+    "nnsvg":  "nnSVG",
+    "spagcn": "SpaGCN",
+    "spaseg": "SpaSEG",
+}
+
 # ---------------------------------------------------------------------------
 # 3) 数据集注册表（可被命令行显式参数覆盖）
 # ---------------------------------------------------------------------------

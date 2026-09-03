@@ -174,9 +174,12 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
 # SVG 检测 + 保存 + 绘图
 # ---------------------------------------------------------------------------
 def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
-    from SpaGCN.ez_mode import detect_SVGs_ez_mode, plot_spatial_domains_ez_mode
+    from SpaGCN.calculate_adj import calculate_adj_matrix
+    from SpaGCN.util import (search_radius, find_neighbor_clusters,
+                             rank_genes_groups)
+    from SpaGCN.ez_mode import plot_spatial_domains_ez_mode
 
-    print("[5/6] 逐空间域检测 SVG")
+    print("[5/6] 逐空间域检测 SVG（并计算全基因排名）")
     import scanpy as sc
 
     plot_spatial_domains_ez_mode(
@@ -184,17 +187,48 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
         plot_color=sc.pl.palettes.default_102, size=40,
         save_dir=str(outdir / f"domains_spaGCN_{sample}.png"))
 
+    cell_id = adata.obs.index.tolist()
+    x = adata.obs[x_name].tolist()
+    y = adata.obs[y_name].tolist()
+    pred = adata.obs["refined_pred"].tolist()
+
+    adj_2d = calculate_adj_matrix(x=x, y=y, histology=False)
+    start, end = np.quantile(adj_2d[adj_2d != 0], q=0.001), \
+        np.quantile(adj_2d[adj_2d != 0], q=0.1)
+
     all_svg = []
+    gene_min_padj = {}   # 基因 -> 各域最小 pvals_adj（用于全基因排名口径）
+    gene_min_pval = {}   # 基因 -> 各域最小 pvals（未校正，供统一 pval 列）
+
     for dom in domains:
         try:
-            df = detect_SVGs_ez_mode(
-                adata, target=dom, x_name=x_name, y_name=y_name,
-                domain_name="refined_pred",
-                min_in_group_fraction=0.7,
-                min_in_out_group_ratio=1.0,
-                min_fold_change=1.5)
-            df["domain"] = dom
-            all_svg.append(df)
+            r = search_radius(target_cluster=dom, cell_id=cell_id, x=x, y=y,
+                              pred=pred, start=start, end=end,
+                              num_min=10, num_max=14, max_run=100)
+            if r is None:
+                r = start
+            nbr = find_neighbor_clusters(target_cluster=dom, cell_id=cell_id,
+                                         x=x, y=y, pred=pred, radius=r,
+                                         ratio=1 / 2)[0:3]
+            de_info = rank_genes_groups(input_adata=adata, target_cluster=dom,
+                                        nbr_list=nbr, label_col="refined_pred",
+                                        adj_nbr=True, log=True)
+            # 全基因排名：记录每个基因在各域的最小 padj（排序用）
+            for g, p in zip(de_info["genes"], de_info["pvals_adj"]):
+                if g not in gene_min_padj or p < gene_min_padj[g]:
+                    gene_min_padj[g] = p
+            # 未校正 p 值：与 padj 同一基因对齐记录最小 pval
+            pvals = de_info["pvals"] if "pvals" in de_info.columns else de_info["pvals_adj"]
+            for g, p in zip(de_info["genes"], pvals):
+                if g not in gene_min_pval or p < gene_min_pval[g]:
+                    gene_min_pval[g] = p
+            # 集合口径：与官方 detect_SVGs_ez_mode 相同的过滤规则
+            filt = de_info[(de_info["pvals_adj"] < 0.05) &
+                           (de_info["in_out_group_ratio"] > 1.0) &
+                           (de_info["in_group_fraction"] > 0.7) &
+                           (de_info["fold_change"] > 1.5)].copy()
+            filt["domain"] = dom
+            all_svg.append(filt)
         except Exception as e:
             print(f"      [警告] 空间域 {dom} 检测 SVG 失败: {e}")
 
@@ -205,6 +239,20 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     csv_path = outdir / f"SVG_spaGCN_{sample}.csv"
     svg_df.to_csv(csv_path, index=False)
     print(f"      已保存 SVG 结果: {csv_path} ({len(svg_df)} 条记录)")
+
+    # ---- 全基因排名 CSV（列固定: gene, stat, pval, padj, rank）----
+    if gene_min_padj:
+        rank_df = pd.DataFrame(
+            {"gene": list(gene_min_padj.keys()),
+             "padj": list(gene_min_padj.values())})
+        rank_df["stat"] = -np.log10(rank_df["padj"].clip(lower=1e-300))
+        rank_df["pval"] = rank_df["gene"].map(gene_min_pval)
+        rank_df = rank_df.sort_values(["padj", "gene"]).reset_index(drop=True)
+        rank_df["rank"] = rank_df.index + 1
+        rank_df = rank_df[["gene", "stat", "pval", "padj", "rank"]]
+        rank_path = outdir / f"SVG_spaGCN_{sample}_rank.csv"
+        rank_df.to_csv(rank_path, index=False)
+        print(f"      已保存全基因排名: {rank_path} ({len(rank_df)} 个基因)")
     return svg_df
 
 
@@ -261,6 +309,16 @@ def main():
     svg_df = detect_and_save(adata, domains, x_name, y_name, outdir, sample)
     print("[6/6] 绘制 Top SVG 空间表达图")
     plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample)
+
+    # 保存运行时间（JSON，供 evaluation 汇总效率指标）
+    import json
+
+    rt_path = outdir / "runtime.json"
+    rt_path.write_text(json.dumps(
+        {"method": "spagcn", "sample": sample,
+         "wall_seconds": round(time.time() - t_start, 2)}))
+    print(f"      已保存运行时间: {rt_path}", flush=True)
+
     print(f"===== run_spaGCN 完成, 总耗时 {time.time() - t_start:.1f}s =====")
 
 

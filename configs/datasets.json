@@ -1,11 +1,94 @@
 {
   "mouse_brain_STARmap": {
     "h5ad": "data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad",
-    "sample": "STARmap_Mouse_Brain"
+    "sample": "STARmap_Mouse_Brain",
+    "tech": "STARmap",
+    "dim": 2
   },
   "Visium_Mouse_Olfactory_Bulb": {
     "h5ad": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb.h5ad",
     "spatial": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb_spatial.tar.gz",
-    "sample": "Visium_Mouse_Olfactory_Bulb"
+    "sample": "Visium_Mouse_Olfactory_Bulb",
+    "tech": "Visium",
+    "dim": 2
+  },
+  "DLPFC_151507": {
+    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151507.h5ad",
+    "sample": "DLPFC_151507",
+    "tech": "DLPFC",
+    "dim": 2
+  },
+  "DLPFC_151508": {
+    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151508.h5ad",
+    "sample": "DLPFC_151508",
+    "tech": "DLPFC",
+    "dim": 2
+  },
+  "DLPFC_151509": {
+    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151509.h5ad",
+    "sample": "DLPFC_151509",
+    "tech": "DLPFC",
+    "dim": 2
+  },
+  "DLPFC_151510": {
+    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151510.h5ad",
+    "sample": "DLPFC_151510",
+    "tech": "DLPFC",
+    "dim": 2
+  },
+  "MERFISH_Moffitt": {
+    "h5ad": "data/MERFISH/GSE113576_Moffitt_and_Bambah-Mukku_et_al_merfish_processed.h5ad",
+    "sample": "MERFISH_Moffitt",
+    "tech": "MERFISH",
+    "dim": 2
+  },
+  "Visium_HD_Mouse_Kidney": {
+    "h5ad": "data/10xVisium/Mouse_Kidney/Visium_HD_Mouse_Kidney.h5ad",
+    "sample": "Visium_HD_Mouse_Kidney",
+    "tech": "Visium_HD",
+    "dim": 2
+  },
+  "STARmap_AD_13m_ctrl_rep1": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-control-replicate_1_data.h5ad",
+    "sample": "STARmap_AD_13m_ctrl_rep1",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "Stereo_seq_drosophila": {
+    "h5ad": "data/stereo-seq/drosophila/E14-16h_a_count_normal_stereoseq.h5ad",
+    "sample": "Stereo_seq_drosophila",
+    "tech": "Stereo_seq",
+    "dim": 3,
+    "n_slices": 16,
+    "z_source": "obsm_spatial_col3"
+  },
+  "Slide_seq_OB2_3D": {
+    "dim": 3,
+    "tech": "Slide_seq",
+    "sample": "Slide_seq_OB2",
+    "n_slices": 20,
+    "reconstruction": "stack_2d_slices",
+    "slices": [
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173945_OB2-Slide01_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173946_OB2-Slide02_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173947_OB2-Slide03_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173948_OB2-Slide04_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173949_OB2-Slide05_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173950_OB2-Slide06_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173951_OB2-Slide07_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173952_OB2-Slide08_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173953_OB2-Slide09_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173954_OB2-Slide10_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173955_OB2-Slide11_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173956_OB2-Slide12_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173957_OB2-Slide13_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173958_OB2-Slide14_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173959_OB2-Slide15_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173960_OB2-Slide16_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173961_OB2-Slide17_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173962_OB2-Slide18_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173963_OB2-Slide19_slide-seqv2_processed.h5ad",
+      "data/Slide-seq/mouse_olf_bulb_slide/GSM5173964_OB2-Slide20_slide-seqv2_processed.h5ad"
+    ]
   }
 }

@@ -54,6 +54,9 @@ def main() -> None:
     ap.add_argument("--outdir", type=str, default=None, help="输出根目录")
     ap.add_argument("--sample-name", type=str, default=None,
                     help="样本名（用于 SpaGCN/SpaSEG 输出文件前缀，默认取 dataset/h5ad）")
+    ap.add_argument("--tech", type=str, default=None,
+                    help=f"技术类型（用于区分 h5ad 结构差异）：{list(src.TECH_TYPES)}"
+                         "；默认取 dataset 注册的 tech，未知则自动探测")
     ap.add_argument("--methods", nargs="+", choices=list(src.METHOD_SUBDIRS),
                     default=list(src.ALL_METHODS),
                     help="要生成的数据")
@@ -65,12 +68,14 @@ def main() -> None:
 
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
-                          sample=args.sample_name, methods=args.methods)
+                          sample=args.sample_name, tech=args.tech,
+                          methods=args.methods)
     src.log_header("h5ad_preprocess (batch)")
     src.log_message(f"dataset = {run['dataset']}")
     src.log_message(f"h5ad    = {run['h5ad']}")
     src.log_message(f"outdir  = {run['outdir']}")
     src.log_message(f"sample  = {run['sample']}")
+    src.log_message(f"tech    = {run['tech'] or 'auto'}")
     src.log_message(f"methods = {run['methods']}")
     src.preprocess_run(run, methods=run["methods"])
 

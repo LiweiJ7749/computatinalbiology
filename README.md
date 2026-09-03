@@ -7,9 +7,10 @@
 
 | 环境 | 用途 | 路径 |
 |---|---|---|
-| **renv** (R 4.4.3) | R 包管理 (SPARK, nnSVG) | `D:\R-4.4.3\bin\Rscript.exe`，`.Rprofile` 自动激活 |
+| **renv** (R 4.4.3) | R 包管理 + 运行时 (SPARK, nnSVG) | `env_R/lib/R/bin/Rscript.exe`，`.Rprofile` 自动激活 renv |
 | **env_spatial** | Python 方法 (SpaGCN, SpaSEG) | `env_spatial\python.exe` |
-| **env_R** | conda R 备选 | `env_R\lib\R\bin\Rscript.exe`（回退） |
+
+> 说明：R 环境基于 conda R (env_R)，所有 R 包由 **renv** 统一管理（`renv.lock` + `renv/library/`）。R 脚本在项目根目录运行时，`.Rprofile` 自动激活 renv。HPC 迁移时仅需复制项目目录并执行 `renv::restore()`。
 
 ## 使用方法
 
@@ -29,22 +30,16 @@
 
 # 自定义输出目录
 .\src\pipeline\run_benchmark.ps1 -outdir .\results\my_run -sample my_sample
+
+.\src\pipeline\run_benchmark.ps1 -outdir ".\results\unified_env" -sample "unified_env" -device "auto"
 ```
 
 **Bash（需 WSL / Git Bash）：**
 
 ```bash
-# 默认数据集 mouse_brain_STARmap
 bash src/pipeline/models_benchmark.sh
-
-# 指定数据集
 bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
-
-# 指定方法子集
 bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods spagcn,spaseg
-
-# 自定义输入
-bash src/pipeline/models_benchmark.sh --h5ad ./data/xxx.h5ad --outdir ./results/my --sample my
 ```
 
 ### 分步运行
@@ -68,13 +63,15 @@ python src/utils/evaluation.py --dataset mouse_brain_STARmap
 ### 环境变量
 
 - `SVG_PYTHON` — 指定 Python 解释器（默认 `env_spatial/python.exe`）
-- `SVG_RSCRIPT` — 指定 Rscript 路径（默认 `D:\R-4.4.3\bin\Rscript.exe`）
+- `SVG_RSCRIPT` — 指定 Rscript 路径（默认 `env_R/lib/R/bin/Rscript.exe`）
 
 ## 项目结构
 
 ```
 src/
-├── pipeline/models_benchmark.sh   # 主控流水线脚本
+├── pipeline/
+│   ├── models_benchmark.sh    # 主控流水线脚本 (Bash)
+│   └── run_benchmark.ps1      # 主控流水线脚本 (PowerShell)
 ├── preprocess/h5ad_preprocess.py  # 共同前处理
 ├── r_models/
 │   ├── run_spark.r                # SPARK-X

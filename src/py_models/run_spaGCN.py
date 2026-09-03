@@ -42,8 +42,17 @@ import src  # noqa: E402
 DEVICE_DEFAULT = "auto"   # auto=有 GPU 用 cuda；否则 CPU 回退
 
 
+def _load_params():
+    """从 configs/model_params/spaGCN.json 加载参数，与 CLI 覆盖合并。"""
+    defaults = src.load_model_params("spagcn")
+    return defaults
+
+
+PARAMS = _load_params()
+
+
 def _resolve_inputs(args):
-    """解析 run 配置，返回 (adata路径, outdir, sample)。"""
+    """解析 run 配置，返回 (adata路径, outdir, sample, 参数字典)。"""
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
                           sample=args.sample, methods=["spagcn"])
@@ -54,9 +63,9 @@ def _resolve_inputs(args):
     prepared = outdir / f"{sample}_spaGCN.h5ad"
     h5ad_in = prepared if prepared.exists() else run["h5ad"]
     if prepared.exists():
-        print(f"[run_spaGCN] 使用前处理产物: {prepared}")
+        src.log_message(f"使用前处理产物: {prepared}")
     else:
-        print(f"[run_spaGCN] 未发现 {prepared}，回退读原始 h5ad: {run['h5ad']}")
+        src.log_message(f"未发现 {prepared}，回退读原始 h5ad: {run['h5ad']}")
     return h5ad_in, outdir, sample
 
 
@@ -68,14 +77,14 @@ def _pick_device(arg: str) -> str:
     if arg == "auto":
         dev = "cuda" if has_cuda else "cpu"
         if not has_cuda:
-            print("[run_spaGCN] 警告：未检测到 CUDA，回退 CPU（会很慢）", flush=True)
+            src.log_message("警告：未检测到 CUDA，回退 CPU（会很慢）")
     else:
         dev = arg
     if dev == "cuda" and not has_cuda:
         raise SystemExit("[run_spaGCN] --device cuda 但未检测到可用 CUDA GPU，"
                          "请检查 nvidia-smi 与 torch 是否为 CUDA 版，或改用 --device auto/cpu。")
     if has_cuda:
-        print(f"[run_spaGCN] 使用设备: cuda ({torch.cuda.get_device_name(0)})", flush=True)
+        src.log_message(f"使用设备: cuda ({torch.cuda.get_device_name(0)})")
     return dev
 
 
@@ -86,13 +95,13 @@ def load_and_prepare(h5ad_in: Path, device: str):
     import anndata as ad
     import scanpy as sc
 
-    print(f"[1/6] 读取 h5ad: {h5ad_in}")
+    src.log_step(1, 6, f"读取 h5ad: {h5ad_in}")
     adata = ad.read_h5ad(h5ad_in)
-    print(f"      shape = {adata.shape} (spots x genes)")
+    src.log_message(f"shape = {adata.shape} (spots x genes)")
 
     # 坐标列 x/y（SpaGCN 用于建邻接矩阵 / refine / 绘图）
     if "x" not in adata.obs.columns or "y" not in adata.obs.columns:
-        print("      obs 无 x/y，从 obsm['spatial'] 派生")
+        src.log_message("obs 无 x/y，从 obsm['spatial'] 派生")
         coords = np.asarray(adata.obsm["spatial"], dtype=float)
         adata.obs["x"] = coords[:, 0]
         adata.obs["y"] = coords[:, 1]
@@ -102,15 +111,16 @@ def load_and_prepare(h5ad_in: Path, device: str):
     # X 统一为真实 counts（若存在 raw_count 层），再做单次 normalize+log1p
     if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
         adata.X = adata.layers["raw_count"].copy()
-        print("      X <- layers['raw_count']（真实 counts）")
+        src.log_message("X <- layers['raw_count']（真实 counts）")
 
-    print("[2/6] 预处理（prefilter + normalize + log1p）")
+    src.log_step(2, 6, "预处理（prefilter + normalize + log1p）")
+    min_cells = PARAMS.get("min_cells", 3)
     adata.var_names_make_unique()
-    _prefilter_genes(adata, min_cells=3)
+    _prefilter_genes(adata, min_cells=min_cells)
     _prefilter_specialgenes(adata)
     sc.pp.normalize_per_cell(adata)
     sc.pp.log1p(adata)
-    print(f"      预处理后 shape = {adata.shape}")
+    src.log_message(f"预处理后 shape = {adata.shape}")
     return adata, x_array, y_array, device
 
 
@@ -135,10 +145,11 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
     from SpaGCN.calculate_adj import calculate_adj_matrix
     from SpaGCN.util import search_l, search_res
 
-    print("[3/6] 计算邻接矩阵 (histology=False) + 搜索超参 l / res")
+    src.log_step(3, 6, "计算邻接矩阵 (histology=False) + 搜索超参 l / res")
     adj = calculate_adj_matrix(x=x_array, y=y_array, histology=False)
-    l = search_l(p=0.5, adj=adj)
-    print(f"      l = {l}")
+    p_val = PARAMS.get("p", 0.5)
+    l = search_l(p=p_val, adj=adj)
+    src.log_message(f"l = {l}")
 
     # 目标域数：优先 --n-clusters；其次 h5ad 自带 clusters 类别数；默认 9
     if n_clusters is None:
@@ -146,15 +157,18 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
             n_clusters = adata.obs["clusters"].nunique()
         else:
             n_clusters = 9
-    print(f"      target_num(clusters) = {n_clusters}")
+    src.log_message(f"target_num(clusters) = {n_clusters}")
     res = search_res(adata, adj, l, target_num=n_clusters)
-    print(f"      res = {res}")
+    src.log_message(f"res = {res}")
 
-    print("[4/6] SpaGCN 训练 + 预测 + refine")
+    src.log_step(4, 6, "SpaGCN 训练 + 预测 + refine")
+    tol = PARAMS.get("tol", 5e-3)
+    lr = PARAMS.get("lr", 0.05)
+    max_epochs = PARAMS.get("max_epochs", 200)
     clf = SpaGCN()
     clf.set_l(l)
     clf.train(adata, adj, init_spa=True, init="louvain", res=res,
-              tol=5e-3, lr=0.05, max_epochs=200, device=device)
+              tol=tol, lr=lr, max_epochs=max_epochs, device=device)
     y_pred, prob = clf.predict()
     adata.obs["pred"] = np.asarray(y_pred).astype(str)
 
@@ -166,7 +180,7 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
                      dis=adj_2d, shape="square")
     adata.obs["refined_pred"] = np.asarray(refined).astype(str)
     domains = sorted(adata.obs["refined_pred"].unique())
-    print(f"      空间域数量 = {len(domains)}")
+    src.log_message(f"空间域数量 = {len(domains)}")
     return adata, domains
 
 
@@ -178,10 +192,9 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     from SpaGCN.util import (search_radius, find_neighbor_clusters,
                              rank_genes_groups)
     from SpaGCN.ez_mode import plot_spatial_domains_ez_mode
-
-    print("[5/6] 逐空间域检测 SVG（并计算全基因排名）")
     import scanpy as sc
 
+    src.log_step(5, 6, "逐空间域检测 SVG（并计算全基因排名）")
     plot_spatial_domains_ez_mode(
         adata, domain_name="refined_pred", x_name=x_name, y_name=y_name,
         plot_color=sc.pl.palettes.default_102, size=40,
@@ -230,7 +243,7 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
             filt["domain"] = dom
             all_svg.append(filt)
         except Exception as e:
-            print(f"      [警告] 空间域 {dom} 检测 SVG 失败: {e}")
+            src.log_message(f"空间域 {dom} 检测 SVG 失败: {e}")
 
     if all_svg:
         svg_df = pd.concat(all_svg, ignore_index=True)
@@ -238,7 +251,7 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
         svg_df = pd.DataFrame()
     csv_path = outdir / f"SVG_spaGCN_{sample}.csv"
     svg_df.to_csv(csv_path, index=False)
-    print(f"      已保存 SVG 结果: {csv_path} ({len(svg_df)} 条记录)")
+    src.log_message(f"已保存 SVG 结果: {csv_path} ({len(svg_df)} 条记录)")
 
     # ---- 全基因排名 CSV（列固定: gene, stat, pval, padj, rank）----
     if gene_min_padj:
@@ -252,7 +265,7 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
         rank_df = rank_df[["gene", "stat", "pval", "padj", "rank"]]
         rank_path = outdir / f"SVG_spaGCN_{sample}_rank.csv"
         rank_df.to_csv(rank_path, index=False)
-        print(f"      已保存全基因排名: {rank_path} ({len(rank_df)} 个基因)")
+        src.log_message(f"已保存全基因排名: {rank_path} ({len(rank_df)} 个基因)")
     return svg_df
 
 
@@ -262,11 +275,11 @@ def plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample, top_n=6):
     import scanpy as sc
 
     if svg_df is None or len(svg_df) == 0:
-        print("      无 SVG 记录，跳过 Top 绘图")
+        src.log_message("无 SVG 记录，跳过 Top 绘图")
         return
     gene_col = "genes" if "genes" in svg_df.columns else svg_df.columns[0]
     top = svg_df.sort_values("pvals_adj")[gene_col].head(top_n).tolist()
-    print(f"      Top SVG 基因: {top}")
+    src.log_message(f"Top SVG 基因: {top}")
     for g in top:
         col = adata.X[:, adata.var.index == g]
         expr = np.asarray(col.toarray()).ravel() if hasattr(col, "toarray") else np.asarray(col).ravel()
@@ -278,7 +291,7 @@ def plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample, top_n=6):
         fig.axes.invert_yaxis()
         fig.figure.savefig(str(outdir / f"SVG_spaGCN_{sample}_{g}.png"), dpi=300)
         plt.close(fig.figure)
-    print(f"      已保存 Top SVG 空间表达图到 {outdir}")
+    src.log_message(f"已保存 Top SVG 空间表达图到 {outdir}")
 
 
 def main():
@@ -293,6 +306,8 @@ def main():
     args = ap.parse_args()
 
     t_start = time.time()
+    abs_outdir = outdir.resolve() if isinstance(outdir, Path) else Path(outdir).resolve()
+    src.log_header(f"SpaGCN: {sample}")
     h5ad_in, outdir, sample = _resolve_inputs(args)
     device = _pick_device(args.device)
 
@@ -307,7 +322,7 @@ def main():
     # 坐标列作为绘图用 x_name/y_name
     x_name, y_name = "x", "y"
     svg_df = detect_and_save(adata, domains, x_name, y_name, outdir, sample)
-    print("[6/6] 绘制 Top SVG 空间表达图")
+    src.log_step(6, 6, "绘制 Top SVG 空间表达图")
     plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample)
 
     # 保存运行时间（JSON，供 evaluation 汇总效率指标）
@@ -317,9 +332,10 @@ def main():
     rt_path.write_text(json.dumps(
         {"method": "spagcn", "sample": sample,
          "wall_seconds": round(time.time() - t_start, 2)}))
-    print(f"      已保存运行时间: {rt_path}", flush=True)
+    src.log_message(f"已保存运行时间: {rt_path}")
 
-    print(f"===== run_spaGCN 完成, 总耗时 {time.time() - t_start:.1f}s =====")
+    total = time.time() - t_start
+    src.log_message(f"总耗时 {total:.1f}s", section=f"SpaGCN {sample} 完成")
 
 
 if __name__ == "__main__":

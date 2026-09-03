@@ -98,14 +98,14 @@ def load_expr_and_coords(run: dict, knn: int):
     h5ad_path = run["h5ad"]
     if not h5ad_path.exists():
         raise FileNotFoundError(f"h5ad 不存在: {h5ad_path}")
-    print(f"[evaluation] 读取 h5ad: {h5ad_path}")
+    src.log_message(f"读取 h5ad: {h5ad_path}")
     adata = ad.read_h5ad(h5ad_path)
-    print(f"      shape = {adata.shape} (spots x genes)")
+    src.log_message(f"shape = {adata.shape} (spots x genes)")
 
     coords_df = src.load_coords(adata, run.get("spatial"))
     keep = [b for b in adata.obs.index if b in coords_df.index]
     coords = coords_df.loc[keep, ["x", "y"]].to_numpy(dtype=np.float64)
-    print(f"      [evaluation] 对齐坐标后 spots = {len(keep)}")
+    src.log_message(f"对齐坐标后 spots = {len(keep)}")
 
     # 表达矩阵：优先 raw_count 层（真实 counts），做 library-size normalize + log1p
     if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
@@ -132,7 +132,7 @@ def load_expr_and_coords(run: dict, knn: int):
         if col in adata.obs.columns and adata.obs[col].notna().any():
             labels = adata.obs[col].iloc[spot_idx].astype(str).tolist()
             label_col = col
-            print(f"      [evaluation] 发现类别标注列: obs['{col}']")
+            src.log_message(f"发现类别标注列: obs['{col}']")
             break
 
     W = M.knn_weights(coords, k=knn)
@@ -360,21 +360,20 @@ def run_evaluation(args) -> int:
                 rank_dfs[m] = read_rank_csv(csv_path)
                 runtimes[m] = read_runtime(subdir / "runtime.json")
             except Exception as e:
-                print(f"      [警告] 读入 {csv_path} 失败: {e}")
+                src.log_message(f"读入 {csv_path} 失败: {e}")
                 missing.append(m)
         else:
             missing.append(m)
 
     if not rank_dfs:
-        print(f"[错误] 未找到任何统一排名 CSV（期望 *_rank.csv），方法: {missing}",
-              file=sys.stderr)
+        src.log_message(f"未找到任何统一排名 CSV（期望 *_rank.csv），方法: {missing}")
         return 1
     if missing:
-        print(f"[警告] 缺失排名 CSV 的方法将被跳过: {missing}")
+        src.log_message(f"缺失排名 CSV 的方法将被跳过: {missing}")
 
     methods = [m for m in run["methods"] if m in rank_dfs]
-    print(f"[evaluation] 读到排名 CSV 的方法: "
-          f"{[src.METHOD_LABELS[m] for m in methods]}")
+    src.log_message(f"读到排名 CSV 的方法: "
+                    f"{[src.METHOD_LABELS[m] for m in methods]}")
 
     # --- 构建统一表达矩阵与空间权重 ---
     expr_mat, W, gene_names, coords, labels, label_col = load_expr_and_coords(
@@ -386,7 +385,7 @@ def run_evaluation(args) -> int:
     # --- 逐方法计算指标 ---
     method_results = {}
     for m in methods:
-        print(f"      [evaluation] 计算 {src.METHOD_LABELS[m]} 指标 ...")
+        src.log_message(f"计算 {src.METHOD_LABELS[m]} 指标 ...")
         method_results[m] = method_metrics(
             m, rank_dfs[m], runtimes.get(m, np.nan), expr_mat, W, gene_names,
             moran_table, labels, n_clusters, top_k_list, args.n_null, args.seed)
@@ -481,7 +480,7 @@ def run_evaluation(args) -> int:
 
     # --- 绘图（--no-figures 时跳过）---
     if not args.no_figures:
-        print("[evaluation] 生成图表 ...")
+        src.log_message("生成图表 ...")
         try:
             plot_pval_hist(rank_dfs, figures_dir / "pval_hist.png")
             plot_sig_ratio_curve(rank_dfs, figures_dir / "sig_ratio_curve.png")
@@ -499,7 +498,7 @@ def run_evaluation(args) -> int:
                 plot_ari_curve(pd.DataFrame(ari_rows),
                                figures_dir / "ari_curve.png")
         except Exception as e:
-            print(f"      [警告] 绘图失败（不影响表与 summary）: {e}", file=sys.stderr)
+            src.log_message(f"绘图失败（不影响表与 summary）: {e}")
 
     # --- summary.json ---
     summary = {
@@ -544,15 +543,15 @@ def run_evaluation(args) -> int:
         json.dump(_sanitize_json(summary), f, indent=2, ensure_ascii=False)
 
     # --- 打印汇总到 stdout（供 pipeline 日志）---
-    print("\n===== evaluation 汇总 =====")
-    print(f"  sample={sample}  genes={len(gene_names)}  spots={expr_mat.shape[1]}"
-          f"  labels={has_labels}")
+    src.log_header("evaluation 汇总")
+    src.log_message(f"sample={sample}  genes={len(gene_names)}  spots={expr_mat.shape[1]}"
+                    f"  labels={has_labels}")
     for m in methods:
         r = method_results[m]
-        print(f"  [{src.METHOD_LABELS[m]:>7}] n_sig={r['n_sig']:>4} "
-              f"median_moran={r['median_moran_I']:.3f} "
-              f"null_p={r['null_p']:.3f} wall={r['wall_seconds']:.1f}s")
-    print(f"  eval 产物目录: {eval_dir}")
+        src.log_message(f"[{src.METHOD_LABELS[m]:>7}] n_sig={r['n_sig']:>4} "
+                        f"median_moran={r['median_moran_I']:.3f} "
+                        f"null_p={r['null_p']:.3f} wall={r['wall_seconds']:.1f}s")
+    src.log_message(f"eval 产物目录: {eval_dir}")
     return 0
 
 

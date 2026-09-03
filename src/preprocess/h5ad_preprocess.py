@@ -66,12 +66,12 @@ def main() -> None:
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
                           sample=args.sample_name, methods=args.methods)
-    print("===== h5ad_preprocess (batch) =====")
-    print(f"dataset = {run['dataset']}")
-    print(f"h5ad    = {run['h5ad']}")
-    print(f"outdir  = {run['outdir']}")
-    print(f"sample  = {run['sample']}")
-    print(f"methods = {run['methods']}")
+    src.log_header("h5ad_preprocess (batch)")
+    src.log_message(f"dataset = {run['dataset']}")
+    src.log_message(f"h5ad    = {run['h5ad']}")
+    src.log_message(f"outdir  = {run['outdir']}")
+    src.log_message(f"sample  = {run['sample']}")
+    src.log_message(f"methods = {run['methods']}")
     src.preprocess_run(run, methods=run["methods"])
 
 

@@ -12,6 +12,21 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
+# 日志工具
+log_msg <- function(msg) {
+  ts <- format(Sys.time(), "%H:%M:%S")
+  cat(sprintf("  [%s] %s\n", ts, msg))
+}
+log_header <- function(title) {
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n", sep = "")
+  ts <- format(Sys.time(), "%H:%M:%S")
+  cat(sprintf("  [%s] %s\n", ts, title))
+  cat(paste(rep("=", 60), collapse = ""), "\n", sep = "")
+}
+log_step <- function(i, total, msg) {
+  log_header(sprintf("[%d/%d] %s", i, total, msg))
+}
+
 # ---------- 路径 ----------
 args <- commandArgs(trailingOnly = TRUE)
 data_dir <- if (length(args) >= 1) args[1] else
@@ -20,9 +35,9 @@ sample <- if (length(args) >= 2) args[2] else
   basename(dirname(normalizePath(data_dir, winslash = "/")))
 out_dir <- data_dir
 
-cat("===== SPARK-X: 读取中间文件 =====\n")
-cat("数据目录:", data_dir, "\n")
-cat("样本标签(sample):", sample, "\n")
+log_header(sprintf("SPARK-X: %s", sample))
+log_msg(sprintf("数据目录: %s", data_dir))
+log_msg(sprintf("样本标签: %s", sample))
 
 counts <- readMM(file.path(data_dir, "counts.mtx"))
 genes  <- read.csv(file.path(data_dir, "genes.csv"),  header = FALSE, stringsAsFactors = FALSE)[, 1]
@@ -46,16 +61,16 @@ cat(sprintf("location 维度: %d x %d\n", nrow(loc), ncol(loc)))
 mt_idx <- grep("^mt-", rownames(counts), ignore.case = TRUE)
 if (length(mt_idx) != 0) {
   counts <- counts[-mt_idx, ]
-  cat(sprintf("去除线粒体基因 %d 个\n", length(mt_idx)))
+  log_msg(sprintf("去除线粒体基因 %d 个", length(mt_idx)))
 }
 
 # ---------- 运行 SPARK-X ----------
-cat("===== 运行 sparkx (mixture) =====\n")
+log_step(1, 2, "运行 sparkx (mixture)")
 t0 <- Sys.time()
 res <- sparkx(counts, loc, numCores = 1, option = "mixture", verbose = FALSE)
 t1 <- Sys.time()
 wall_seconds <- as.numeric(difftime(t1, t0, units = "secs"))
-cat(sprintf("SPARK-X 运行耗时: %.1f 秒\n", wall_seconds))
+log_msg(sprintf("SPARK-X 运行耗时: %.1f 秒", wall_seconds))
 
 # ---------- 汇总结果 ----------
 res_mtest <- res$res_mtest
@@ -78,8 +93,8 @@ res_df$rank <- seq_len(nrow(res_df))
 # ---------- 保存 CSV ----------
 csv_path <- file.path(out_dir, sprintf("SVG_SPARK_%s.csv", sample))
 write.csv(res_df, csv_path, row.names = FALSE)
-cat("已保存结果:", csv_path, "\n")
-cat(sprintf("显著 SVG (adjustedPval < 0.05): %d / %d\n",
+log_msg(sprintf("已保存结果: %s", csv_path))
+log_msg(sprintf("显著 SVG (adjustedPval < 0.05): %d / %d",
             sum(res_df$adjustedPval < 0.05, na.rm = TRUE), nrow(res_df)))
 
 # ---------- 保存跨方法统一的排名 CSV（列固定: gene, stat, pval, padj, rank）----------
@@ -96,13 +111,13 @@ eval_df <- eval_df[order(eval_df$padj, -eval_df$stat, na.last = TRUE), ]
 eval_df$rank <- seq_len(nrow(eval_df))
 eval_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_rank.csv", sample))
 write.csv(eval_df, eval_path, row.names = FALSE)
-cat("已保存统一排名 CSV:", eval_path, "\n")
+log_msg(sprintf("已保存统一排名 CSV: %s", eval_path))
 
 # ---------- 保存运行时间（JSON，供 evaluation 汇总效率指标）----------
 rt_path <- file.path(out_dir, "runtime.json")
 writeLines(sprintf('{"method":"spark","sample":"%s","wall_seconds":%.2f}',
                    sample, wall_seconds), rt_path)
-cat("已保存运行时间:", rt_path, "\n")
+log_msg(sprintf("已保存运行时间: %s", rt_path))
 
 # ---------- 展示图 ----------
 top_n <- 30
@@ -119,6 +134,7 @@ p <- ggplot(top_df, aes(x = gene, y = -log10(adjustedPval))) +
 
 png_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_top.png", sample))
 ggsave(png_path, p, width = 8, height = 6, dpi = 150)
-cat("已保存展示图:", png_path, "\n")
+log_msg(sprintf("已保存展示图: %s", png_path))
 
-cat("===== SPARK-X 完成 ✓ =====\n")
+log_header("完成")
+log_msg("SPARK-X 完成")

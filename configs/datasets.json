@@ -1,0 +1,11 @@
+{
+  "mouse_brain_STARmap": {
+    "h5ad": "data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad",
+    "sample": "STARmap_Mouse_Brain"
+  },
+  "Visium_Mouse_Olfactory_Bulb": {
+    "h5ad": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb.h5ad",
+    "spatial": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb_spatial.tar.gz",
+    "sample": "Visium_Mouse_Olfactory_Bulb"
+  }
+}

@@ -24,6 +24,21 @@ suppressPackageStartupMessages({
   library(BiocParallel)
 })
 
+# 日志工具（与 run_spark.r 一致）
+log_msg <- function(msg) {
+  ts <- format(Sys.time(), "%H:%M:%S")
+  cat(sprintf("  [%s] %s\n", ts, msg))
+}
+log_header <- function(title) {
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n", sep = "")
+  ts <- format(Sys.time(), "%H:%M:%S")
+  cat(sprintf("  [%s] %s\n", ts, title))
+  cat(paste(rep("=", 60), collapse = ""), "\n", sep = "")
+}
+log_step <- function(i, total, msg) {
+  log_header(sprintf("[%d/%d] %s", i, total, msg))
+}
+
 # ---------- 路径 ----------
 args <- commandArgs(trailingOnly = TRUE)
 data_dir <- if (length(args) >= 1) args[1] else
@@ -34,10 +49,10 @@ n_threads <- if (length(args) >= 3) as.integer(args[3]) else
   if (!is.na(parallel::detectCores())) parallel::detectCores() else 4
 out_dir <- data_dir
 
-cat("===== nnSVG: 读取中间文件 =====\n")
-cat("数据目录:", data_dir, "\n")
-cat("样本标签(sample):", sample, "\n")
-cat("平台:", .Platform$OS.type, "| 请求线程数:", n_threads, "\n")
+log_header(sprintf("nnSVG: %s", sample))
+log_msg(sprintf("数据目录: %s", data_dir))
+log_msg(sprintf("样本标签: %s", sample))
+log_msg(sprintf("平台: %s | 请求线程数: %d", .Platform$OS.type, n_threads))
 
 counts <- readMM(file.path(data_dir, "counts.mtx"))
 genes  <- read.csv(file.path(data_dir, "genes.csv"),  header = FALSE, stringsAsFactors = FALSE)[, 1]
@@ -68,40 +83,38 @@ rownames(spe) <- genes
 # ---------- 过滤基因 ----------
 spe <- filter_genes(spe, filter_genes_ncounts = 3,
                     filter_genes_pcspots = 0.5, filter_mito = TRUE)
-cat(sprintf("过滤后基因数: %d\n", nrow(spe)))
+log_msg(sprintf("过滤后基因数: %d", nrow(spe)))
 
 # ---------- 计算 logcounts ----------
 spe <- computeLibraryFactors(spe)
 spe <- logNormCounts(spe)
-cat("assay names:", paste(assayNames(spe), collapse = ", "), "\n")
+log_msg(sprintf("assay names: %s", paste(assayNames(spe), collapse = ", ")))
 
 # 保存中间对象便于调试
 rds_path <- file.path(out_dir, "nnSVG_spe.rds")
 saveRDS(spe, rds_path)
-cat("已保存中间对象:", rds_path, "\n")
+log_msg(sprintf("已保存中间对象: %s", rds_path))
 
 # ---------- 运行 nnSVG ----------
 # 平台自适应并行（nnSVG 官方公开 BPPARAM 参数；不改包源码，HPC 可复现）：
 #   Windows -> SerialParam（本机诊断: PSOCK 并行不稳定，见头注释）
 #   POSIX(HPC) + n_threads>1 -> MulticoreParam(fork)，逐基因并行 BRISC
 if (.Platform$OS.type == "windows") {
-  cat("===== 运行 nnSVG =====\n")
-  cat("[平台] Windows: 诊断确认 PSOCK/SnowParam 并行不稳定\n")
-  cat("       (BRISC order/neighbor 对象经 socket 导出崩溃), 故使用串行。\n")
-  cat("       同一脚本在 Linux/macOS HPC 上将经 nnSVG 的 BPPARAM 自动多核并行。\n")
+  log_msg("平台 Windows: 使用串行（PSOCK 并行不稳定，见头注释）")
   bp_param <- BiocParallel::SerialParam()
 } else if (n_threads > 1) {
-  cat(sprintf("===== 运行 nnSVG (MulticoreParam fork 并行, %d workers) =====\n", n_threads))
+  log_msg(sprintf("平台 POSIX: 使用 MulticoreParam fork 并行, %d workers", n_threads))
   bp_param <- BiocParallel::MulticoreParam(workers = n_threads)
 } else {
-  cat("===== 运行 nnSVG (串行) =====\n")
+  log_msg("平台 POSIX: 串行")
   bp_param <- BiocParallel::SerialParam()
 }
 set.seed(123)
+log_step(1, 2, "运行 nnSVG")
 t0 <- Sys.time()
 spe <- nnSVG(spe, BPPARAM = bp_param, verbose = FALSE)
 t1 <- Sys.time()
-cat(sprintf("nnSVG 运行耗时: %.2f 分钟\n", as.numeric(difftime(t1, t0, units = "mins"))))
+log_msg(sprintf("nnSVG 运行耗时: %.2f 分钟", as.numeric(difftime(t1, t0, units = "mins"))))
 
 # ---------- 汇总结果 ----------
 rd <- as.data.frame(rowData(spe))
@@ -121,8 +134,8 @@ res_df$rank <- seq_len(nrow(res_df))
 # ---------- 保存 CSV ----------
 csv_path <- file.path(out_dir, sprintf("SVG_nnSVG_%s.csv", sample))
 write.csv(res_df, csv_path, row.names = FALSE)
-cat("已保存结果:", csv_path, "\n")
-cat(sprintf("显著 SVG (padj < 0.05): %d / %d\n",
+log_msg(sprintf("已保存结果: %s", csv_path))
+log_msg(sprintf("显著 SVG (padj < 0.05): %d / %d",
             sum(res_df$padj < 0.05, na.rm = TRUE), nrow(res_df)))
 
 # ---------- 保存跨方法统一的排名 CSV（列固定: gene, stat, pval, padj, rank）----------
@@ -139,13 +152,13 @@ eval_df <- eval_df[order(eval_df$padj, -eval_df$stat, na.last = TRUE), ]
 eval_df$rank <- seq_len(nrow(eval_df))
 eval_path <- file.path(out_dir, sprintf("SVG_nnSVG_%s_rank.csv", sample))
 write.csv(eval_df, eval_path, row.names = FALSE)
-cat("已保存统一排名 CSV:", eval_path, "\n")
+log_msg(sprintf("已保存统一排名 CSV: %s", eval_path))
 
 # ---------- 保存运行时间（JSON，供 evaluation 汇总效率指标）----------
 rt_path <- file.path(out_dir, "runtime.json")
 writeLines(sprintf('{"method":"nnsvg","sample":"%s","wall_seconds":%.2f}',
                    sample, as.numeric(difftime(t1, t0, units = "secs"))), rt_path)
-cat("已保存运行时间:", rt_path, "\n")
+log_msg(sprintf("已保存运行时间: %s", rt_path))
 
 # ---------- 展示图 ----------
 # 1) Top SVG 的 -log10(padj) 柱状图
@@ -163,7 +176,7 @@ p1 <- ggplot(top_df, aes(x = gene, y = -log10(padj))) +
 
 png1 <- file.path(out_dir, sprintf("SVG_nnSVG_%s_top.png", sample))
 ggsave(png1, p1, width = 8, height = 6, dpi = 150)
-cat("已保存展示图:", png1, "\n")
+log_msg(sprintf("已保存展示图: %s", png1))
 
 # 2) Top-1 SVG 的空间表达图（按 res_df 排序取 rank 1，并映射回 spe 行）
 ix_name <- as.character(res_df$gene[1])
@@ -190,6 +203,7 @@ p2 <- ggplot(df, aes(x = x, y = y, color = expr)) +
 
 png2 <- file.path(out_dir, sprintf("SVG_nnSVG_%s_top1_spatial.png", sample))
 ggsave(png2, p2, width = 7, height = 6, dpi = 150)
-cat("已保存空间表达图:", png2, "\n")
+log_msg(sprintf("已保存空间表达图: %s", png2))
 
-cat("===== nnSVG 完成 ✓ =====\n")
+log_header("完成")
+log_msg("nnSVG 完成")

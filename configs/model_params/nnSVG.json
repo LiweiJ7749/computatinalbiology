@@ -1,0 +1,6 @@
+{
+  "filter_genes_ncounts": 3,
+  "filter_genes_pcspots": 0.5,
+  "filter_mito": true,
+  "seed": 123
+}

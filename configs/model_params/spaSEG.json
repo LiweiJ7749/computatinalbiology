@@ -1,0 +1,13 @@
+{
+  "pca_dim": 15,
+  "alpha": 0.4,
+  "beta": 0.7,
+  "min_label": 7,
+  "pretrain_epochs": 400,
+  "iterations": 2100,
+  "position_max": 500.0,
+  "nConv": 2,
+  "lr": 0.002,
+  "weight_decay": 1e-5,
+  "seed": 1029
+}

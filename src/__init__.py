@@ -77,8 +77,36 @@ METHOD_LABELS = {
 
 # ---------------------------------------------------------------------------
 # 3) 数据集注册表（可被命令行显式参数覆盖）
+#   默认从 configs/datasets.json 加载；若文件不存在则回退硬编码。
 # ---------------------------------------------------------------------------
-DATASETS = {
+CONFIG_DIR = ROOT / "configs"
+MODEL_PARAMS_DIR = CONFIG_DIR / "model_params"
+
+
+def _load_datasets_from_config() -> dict:
+    """从 datasets.json 加载数据集注册表，并补齐绝对路径。"""
+    import json
+
+    path = CONFIG_DIR / "datasets.json"
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    out = {}
+    for key, entry in raw.items():
+        resolved = {}
+        for k, v in entry.items():
+            if k in ("h5ad", "spatial") and v and not Path(v).is_absolute():
+                resolved[k] = ROOT / v
+            else:
+                resolved[k] = v
+        out[key] = resolved
+    return out
+
+
+# 尝试从 config 加载数据集，无则用硬编码 fallback
+_config_datasets = _load_datasets_from_config()
+DATASETS = _config_datasets if _config_datasets else {
     "mouse_brain_STARmap": {
         "h5ad": (DATA_DIR / "STARmap" / "mouse_brain_cortex"
                  / "mouse_brain_STARmap_processed.h5ad"),
@@ -92,6 +120,61 @@ DATASETS = {
         "sample": "Visium_Mouse_Olfactory_Bulb",
     },
 }
+
+
+def load_model_params(method: str) -> dict:
+    """从 configs/model_params/<METHOD>.json 加载模型超参数。
+
+    查找优先级：<METHOD_SUBDIRS[method]>.json > <method>.json > 空字典。
+    """
+    import json
+
+    candidates = [
+        MODEL_PARAMS_DIR / f"{METHOD_SUBDIRS.get(method, method)}.json",
+        MODEL_PARAMS_DIR / f"{method}.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# 3a) 日志工具（结构化、带时间戳、可读性好）
+# ---------------------------------------------------------------------------
+def log_message(msg: str = "", section: str = None, flush: bool = True) -> None:
+    """结构化日志输出：时间戳前缀 + 可选节标题。
+
+    Parameters
+    ----------
+    msg : str
+        日志消息文本。空字符串时不输出（常用于只输出 section 标题）。
+    section : str, optional
+        节标题，非 None 时先输出带分隔线的标题。
+    flush : bool
+        是否立即刷新输出（默认 True，保证实时可见）。
+    """
+    from datetime import datetime
+
+    ts = datetime.now().strftime("%H:%M:%S")
+    if section is not None:
+        print(f"\n{'='*60}", flush=flush)
+        print(f"  [{ts}] {section}", flush=flush)
+        print(f"{'='*60}", flush=flush)
+    if msg:
+        print(f"  [{ts}] {msg}", flush=flush)
+
+
+def log_header(title: str) -> None:
+    """输出大节标题（带两侧空行）。"""
+    log_message(section=title)
+
+
+def log_step(step: str, total: int, msg: str = "") -> None:
+    """输出步骤标题（如 [1/6] 读取数据）。"""
+    label = f"[{step}/{total}] {msg}" if msg else f"[{step}/{total}]"
+    log_message(section=label)
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +362,10 @@ def _raw_counts_matrix(h5ad):
 
     if "raw_count" in h5ad.layers and h5ad.layers["raw_count"] is not None:
         X = h5ad.layers["raw_count"]
-        print("      [表达矩阵] 使用 layers['raw_count']（真实 counts）")
+        log_message("表达矩阵: 使用 layers['raw_count']（真实 counts）")
     else:
         X = h5ad.X
-        print("      [表达矩阵] 无 raw_count 层，回退 X（注意：可能不是原始 counts）")
+        log_message("表达矩阵: 无 raw_count 层，回退 X（注意：可能不是原始 counts）")
     if not sparse.issparse(X):
         X = sparse.csr_matrix(X)
     return X.astype(np.float64)
@@ -316,7 +399,7 @@ def export_r_format(h5ad, tp, outdir: Path) -> None:
         "x": tp_aligned["x"].values, "y": tp_aligned["y"].values,
     }, index=barcodes)
     loc.to_csv(outdir / "location.csv", index_label="barcode")
-    print(f"      [R 格式] {X.shape[0]} genes x {X.shape[1]} spots -> {outdir}")
+    log_message(f"R 格式导出: {X.shape[0]} genes × {X.shape[1]} spots -> {outdir}")
 
 
 def prepare_spagcn(h5ad, tp, img, outdir: Path, sample_name: str) -> None:
@@ -349,9 +432,9 @@ def prepare_spagcn(h5ad, tp, img, outdir: Path, sample_name: str) -> None:
         import cv2
 
         cv2.imwrite(str(outdir / "histology.png"), img)
-        print(f"      [SpaGCN] 坐标列 + 组织学图像 -> {h5ad_out} / histology.png")
+        log_message(f"SpaGCN 准备: 坐标列 + 组织学图像 -> {h5ad_out} / histology.png")
     else:
-        print(f"      [SpaGCN] 坐标列（无组织学图像，可用 histology=False）-> {h5ad_out}")
+        log_message(f"SpaGCN 准备: 坐标列（无组织学图像，可用 histology=False）-> {h5ad_out}")
     del adata
 
 
@@ -371,7 +454,7 @@ def prepare_spaseg(h5ad, tp, outdir: Path, sample_name: str) -> None:
 
     h5ad_out = outdir / f"{sample_name}_spaSEG.h5ad"
     adata.write(h5ad_out)
-    print(f"      [SpaSEG] obsm['spatial'] -> {h5ad_out}")
+    log_message(f"SpaSEG 准备: obsm['spatial'] -> {h5ad_out}")
     del adata
 
 
@@ -412,15 +495,17 @@ def preprocess_run(run: dict, methods=None) -> dict:
     methods = [m for m in (methods or run["methods"])]
     ensure_run_dirs(run, methods=methods)
 
+    log_header(f"共同前处理: {run.get('dataset', '')}")
+
     h5ad_path = run["h5ad"]
     if not h5ad_path.exists():
         raise FileNotFoundError(f"h5ad 不存在: {h5ad_path}")
-    print(f"[preprocess] 读取 h5ad: {h5ad_path}")
+    log_message(f"读取 h5ad: {h5ad_path}")
     adata = ad.read_h5ad(h5ad_path)
-    print(f"      shape = {adata.shape} (spots x genes)")
+    log_message(f"shape = {adata.shape} (spots x genes)")
 
     tp = load_coords(adata, run.get("spatial"))
-    print(f"      对齐坐标后 spots = {len(tp)}")
+    log_message(f"对齐坐标后 spots = {len(tp)}")
 
     img = None
     if "spagcn" in methods:
@@ -428,7 +513,7 @@ def preprocess_run(run: dict, methods=None) -> dict:
         if src is not None:
             img = _read_hires_image(src)
             if img is not None:
-                print("      已提取组织学图像 (tissue_hires_image.png)")
+                log_message("已提取组织学图像 (tissue_hires_image.png)")
 
     for m in methods:
         outdir = run["method_dirs"][m]
@@ -439,7 +524,7 @@ def preprocess_run(run: dict, methods=None) -> dict:
         elif m == "spaseg":
             prepare_spaseg(adata, tp, outdir, run["sample"])
     del adata
-    print("[preprocess] 完成 ✓")
+    log_message("前处理完成", section="完成")
     return run
 
 

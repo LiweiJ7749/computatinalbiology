@@ -12,7 +12,7 @@
 #        SpaGCN  : python src/py_models/run_spaGCN.py
 #        SpaSEG  : python src/py_models/run_spaSEG.py
 #   3) 每步输出日志到 <outdir>/logs/<step>.log 与控制台
-#   4) 最后调用 src/utils/evaluation.py（评价逻辑按约定留待后续实现）
+#   4) 最后调用 src/utils/evaluation.py
 #
 # 说明：
 #   - R 依赖 renv 项目锁（在项目根 .Rprofile 自动激活），故所有子命令都在
@@ -76,6 +76,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ---------------- 日志工具（结构化、带时间戳） ----------------
+now() { date '+%H:%M:%S'; }
+log_header() {
+  local title="$1"
+  echo ""
+  echo "============================================================"
+  echo "  [$(now)] $title"
+  echo "============================================================"
+}
+log_msg()  { echo "  [$(now)] $*"; }
+
 # ---------------- 定位项目根与解释器 ----------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -105,13 +116,11 @@ fi
 [ -z "$PYTHON" ] && { echo "[错误] 找不到 python，请设置环境变量 SVG_PYTHON" >&2; exit 2; }
 [ -z "$RSCRIPT" ] && { echo "[错误] 找不到 Rscript，请设置环境变量 SVG_RSCRIPT" >&2; exit 2; }
 
-echo "==============================================================="
-echo " models_benchmark.sh —— 批量 SVG 对比"
-echo " ROOT    = $ROOT"
-echo " PYTHON  = $PYTHON"
-echo " RSCRIPT = $RSCRIPT"
-echo " DATASET = $DATASET"
-echo "==============================================================="
+log_header "models_benchmark: 批量 SVG 对比"
+log_msg "ROOT    = $ROOT"
+log_msg "PYTHON  = $PYTHON"
+log_msg "RSCRIPT = $RSCRIPT"
+log_msg "DATASET = $DATASET"
 
 # ---------------- 方法选择（逗号/空格分隔，规范顺序） ----------------
 if [ -n "$METHODS_ARG" ]; then
@@ -127,6 +136,7 @@ else
   METHODS="$ALL_METHODS"
 fi
 [ -z "$METHODS" ] && { echo "[错误] 没有可运行的方法" >&2; exit 1; }
+log_msg "methods = $METHODS"
 
 # ---------------- 解析 run（outdir/sample 以 python src 为准） ----------------
 resolved="$("$PYTHON" - "$DATASET" "$OUTDIR_ARG" "$SAMPLE_ARG" "$H5AD" "$SPATIAL" 2>&1 <<'PY' || true
@@ -165,13 +175,9 @@ to_win() {
 mkdir -p "$OUTDIR/logs"
 LOG_SUMMARY="$OUTDIR/logs/pipeline_summary.log"
 
-log()  { echo "[$(date '+%F %T')] $*" | tee -a "$LOG_SUMMARY"; }
-
-log "== run 配置 =="
-log "  outdir = $OUTDIR"
-log "  sample = $SAMPLE"
-log "  methods= ${METHODS# }"
-log "  device = $DEVICE"
+log_msg "outdir = $OUTDIR"
+log_msg "sample = $SAMPLE"
+log_msg "device = $DEVICE"
 
 # 传递 python 方法的公共参数（h5ad 仅当用户显式给出才传）
 PY_EXTRA=()
@@ -193,29 +199,29 @@ run_R() {
 
 # ---------------- 1) 共同前处理 ----------------
 if [ "$SKIP_PRE" -eq 0 ]; then
-  log "== 步骤 1/2: 共同前处理 (h5ad_preprocess.py) =="
+  log_header "步骤 1/2: 共同前处理 (h5ad_preprocess.py)"
   PREP_SCRIPT="$WIN_ROOT/src/preprocess/h5ad_preprocess.py"
   # shellcheck disable=SC2086
   "$PYTHON" "$PREP_SCRIPT" --dataset "$DATASET" \
     "${PY_EXTRA[@]}" \
     --outdir "$OUTDIR_WIN" --sample-name "$SAMPLE" --methods $METHODS \
     2>&1 | tee -a "$OUTDIR/logs/preprocess.log"
-  log "  前处理完成"
+  log_msg "前处理完成"
 fi
 
 # ---------------- 2) 逐方法运行 ----------------
-log "== 步骤 2/2: 运行各方法 =="
+log_header "步骤 2/2: 运行各方法"
 for m in $METHODS; do
   case "$m" in
     spark)
-      log ">>> [spark] SPARK-X 运行开始"
+      log_header "SPARK-X: $SAMPLE 运行开始"
       t0="$(date +%s)"
       run_R "$WIN_ROOT/src/r_models/run_spark.r" \
           "$OUTDIR_WIN/SPARK_X" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/spark.log"
-      log ">>> [spark] 完成（$(( $(date +%s) - t0 ))s）"
+      log_msg "SPARK-X 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     nnsvg)
-      log ">>> [nnsvg] nnSVG 运行开始"
+      log_header "nnSVG: $SAMPLE 运行开始"
       t0="$(date +%s)"
       if [ -n "$CORES" ]; then
         run_R "$WIN_ROOT/src/r_models/run_nnSVG.r" \
@@ -224,41 +230,41 @@ for m in $METHODS; do
         run_R "$WIN_ROOT/src/r_models/run_nnSVG.r" \
             "$OUTDIR_WIN/nnSVG" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/nnsvg.log"
       fi
-      log ">>> [nnsvg] 完成（$(( $(date +%s) - t0 ))s）"
+      log_msg "nnSVG 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     spagcn)
-      log ">>> [spagcn] SpaGCN 运行开始"
+      log_header "SpaGCN: $SAMPLE 运行开始"
       t0="$(date +%s)"
       "$PYTHON" "$WIN_ROOT/src/py_models/run_spaGCN.py" --dataset "$DATASET" \
         "${PY_EXTRA[@]}" --outdir "$OUTDIR_WIN" --sample "$SAMPLE" \
         --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spagcn.log"
-      log ">>> [spagcn] 完成（$(( $(date +%s) - t0 ))s）"
+      log_msg "SpaGCN 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     spaseg)
-      log ">>> [spaseg] SpaSEG 运行开始"
+      log_header "SpaSEG: $SAMPLE 运行开始"
       t0="$(date +%s)"
       "$PYTHON" "$WIN_ROOT/src/py_models/run_spaSEG.py" --dataset "$DATASET" \
         "${PY_EXTRA[@]}" --outdir "$OUTDIR_WIN" --sample "$SAMPLE" \
         --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spaseg.log"
-      log ">>> [spaseg] 完成（$(( $(date +%s) - t0 ))s）"
+      log_msg "SpaSEG 完成（$(( $(date +%s) - t0 ))s）"
       ;;
   esac
 done
 
-# ---------------- 3) 评估（逻辑后续实现；脚本暂为空则跳过） ----------------
+# ---------------- 3) 评估 ----------------
 if [ "$SKIP_EVAL" -eq 0 ]; then
-  log "== 步骤 3: 调用 evaluation.py（对比四方法并产出结果）=="
+  log_header "步骤 3: 调用 evaluation.py"
   EVAL_SCRIPT="$WIN_ROOT/src/utils/evaluation.py"
-  if [ -s "$EVAL_SCRIPT" ]; then
+  if [ -f "$EVAL_SCRIPT" ]; then
     "$PYTHON" "$EVAL_SCRIPT" --dataset "$DATASET" --outdir "$OUTDIR_WIN" \
       --sample "$SAMPLE" --methods "${METHODS# }" \
       2>&1 | tee -a "$OUTDIR/logs/evaluation.log" || \
-      log "  [警告] evaluation.py 返回非零（尚未实现评价逻辑？）"
+      log_msg "[警告] evaluation.py 返回非零"
   else
-    log "  [跳过] src/utils/evaluation.py 为空（评价逻辑待实现）"
+    log_msg "[跳过] src/utils/evaluation.py 不存在"
   fi
 fi
 
-log "===== models_benchmark 全部完成 ✓ ====="
+log_header "models_benchmark 全部完成"
 echo "结果目录: $OUTDIR"
 echo "日志目录: $OUTDIR/logs"

@@ -306,9 +306,9 @@ def main():
     args = ap.parse_args()
 
     t_start = time.time()
+    h5ad_in, outdir, sample = _resolve_inputs(args)
     abs_outdir = outdir.resolve() if isinstance(outdir, Path) else Path(outdir).resolve()
     src.log_header(f"SpaGCN: {sample}")
-    h5ad_in, outdir, sample = _resolve_inputs(args)
     device = _pick_device(args.device)
 
     # 让 SpaGCN 源码可被 import（本地 GPU 补丁版）

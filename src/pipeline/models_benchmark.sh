@@ -17,8 +17,9 @@
 # 说明：
 #   - R 依赖 renv 项目锁（在项目根 .Rprofile 自动激活），故所有子命令都在
 #     $ROOT 目录下执行。
-#   - 解释器：优先环境变量 SVG_PYTHON / SVG_RSCRIPT，否则自动探测
-#     env_spatial/python.exe 与 env_R/lib/R/bin/Rscript.exe。
+#   - R 解释器：优先 SVG_RSCRIPT 环境变量，然后 D:/R-4.4.3/bin/Rscript.exe
+#     （renv 依赖的 R 版本），最后回退 env_R 与系统 Rscript。
+#   - Python 解释器：优先 SVG_PYTHON 环境变量，然后 env_spatial/python.exe。
 #   - 跨解释器传参统一用 Windows 路径（cygpath -w），兼容 Cygwin/MSYS。
 #
 # 用法示例（在项目根，env_spatial python + renv R 已就绪）：
@@ -108,7 +109,9 @@ if [ -z "$PYTHON" ]; then
 fi
 RSCRIPT="${SVG_RSCRIPT:-}"
 if [ -z "$RSCRIPT" ]; then
-  for c in "$ROOT/env_R/lib/R/bin/Rscript.exe" "$ROOT/env_R/bin/Rscript"; do
+  for c in "D:/R-4.4.3/bin/Rscript.exe" \
+           "$ROOT/env_R/lib/R/bin/Rscript.exe" \
+           "$ROOT/env_R/bin/Rscript"; do
     if [ -n "$c" ] && [ -x "$c" ]; then RSCRIPT="$c"; break; fi
   done
   [ -z "$RSCRIPT" ] && RSCRIPT="$(command -v Rscript || true)"
@@ -184,12 +187,13 @@ PY_EXTRA=()
 [ -n "$H5AD" ]    && PY_EXTRA+=(--h5ad "$H5AD")
 [ -n "$SPATIAL" ] && PY_EXTRA+=(--spatial "$SPATIAL")
 
-# 组装 conda-R 运行库路径（模拟 `conda activate env_R`，供 Rscript 加载 DLL）
+# 组装 R 运行库路径（按优先级：D:/R-4.4.3 -> env_R，供 Rscript 加载 DLL）
 r_env_path() {
   local p="$PATH"
-  [ -d "$ROOT/env_R/Library/bin" ] && p="$ROOT/env_R/Library/bin:$p"
-  [ -d "$ROOT/env_R/bin" ]         && p="$ROOT/env_R/bin:$p"
-  [ -d "$ROOT/env_R/lib/R/bin" ]   && p="$ROOT/env_R/lib/R/bin:$p"
+  [ -d "D:/R-4.4.3/bin" ]              && p="D:/R-4.4.3/bin:$p"
+  [ -d "$ROOT/env_R/Library/bin" ]      && p="$ROOT/env_R/Library/bin:$p"
+  [ -d "$ROOT/env_R/bin" ]              && p="$ROOT/env_R/bin:$p"
+  [ -d "$ROOT/env_R/lib/R/bin" ]        && p="$ROOT/env_R/lib/R/bin:$p"
   printf '%s' "$p"
 }
 # 在项目根执行 R（触发 renv 自动激活）+ 带上 conda-R 库路径
@@ -257,7 +261,7 @@ if [ "$SKIP_EVAL" -eq 0 ]; then
   EVAL_SCRIPT="$WIN_ROOT/src/utils/evaluation.py"
   if [ -f "$EVAL_SCRIPT" ]; then
     "$PYTHON" "$EVAL_SCRIPT" --dataset "$DATASET" --outdir "$OUTDIR_WIN" \
-      --sample "$SAMPLE" --methods "${METHODS# }" \
+      --sample "$SAMPLE" --methods "$(echo ${METHODS} | tr ' ' ',')" \
       2>&1 | tee -a "$OUTDIR/logs/evaluation.log" || \
       log_msg "[警告] evaluation.py 返回非零"
   else

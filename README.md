@@ -1,83 +1,169 @@
-# SVG 检测方法对比
+# SVG 检测方法对比（空间可变基因）
 
-四种空间可变基因（SVG）检测方法的批量对比流水线：
+四种空间可变基因（Spatially Variable Gene, SVG）检测方法的批量对比流水线：
 **SPARK-X**、**nnSVG**、**SpaGCN**、**SpaSEG**。
 
-## 运行环境
+面向 Linux/HPC 大规模空间转录组数据处理，把「单一样本、手改路径」的脚本重构为
+「一个 run 配置驱动、批量调用」的流水线：统一的共同前处理 → 四方法并行/串行执行 →
+统一评估。
 
-| 环境 | 用途 | 路径 |
+## 实验目的
+
+1. 在统一的输入（同一份 h5ad、同一组空间坐标）与统一的输出格式下，批量运行四种
+   SVG 方法，保证结果可比。
+2. 支持多种空间转录组技术（STARmap / MERFISH / Visium / Slide-seq / stereo-seq 等）
+   与 2D/3D 数据。
+3. 输出统一的排名 CSV（`gene, stat, pval, padj, rank`），便于方法间一致性与性能对比。
+4. 在 Linux/HPC 上可复现构建环境、可规模化调度（CPU 并行 / GPU 深度学习）。
+
+## 四种方法
+
+| 方法 | 语言 | 原理 | 空间维度 |
+|---|---|---|---|
+| SPARK-X | R | 无参数核检验（投影 / Gaussian / cosine 核） | 2D + 3D |
+| nnSVG  | R | 高斯过程（BRISC 逐基因空间方差模型） | 2D |
+| SpaGCN | Python | 图卷积网络（GCN），结合表达 + 空间坐标识别空间域 | 2D |
+| SpaSEG | Python | 卷积神经网络（CNN）空间域分割 | 2D |
+
+> 3D 数据（如 stereo-seq、Slide-seq 堆叠切片）目前仅 SPARK-X 支持（其 `locus` 为
+> `n × d`，天然支持任意维坐标）。
+
+## 运行环境（Linux / HPC 原生）
+
+| 环境 | 用途 | 包管理 |
 |---|---|---|
-| **renv** (R 4.4.3) | R 包管理 + 运行时 (SPARK, nnSVG) | `env_R/lib/R/bin/Rscript.exe`，`.Rprofile` 自动激活 renv |
-| **env_spatial** | Python 方法 (SpaGCN, SpaSEG) | `env_spatial\python.exe` |
+| `spatial`（Python 3.9） | SpaGCN / SpaSEG + 前处理 | conda + pip（`requirements.txt`），torch 自动探测 CUDA |
+| `spatial_R`（R 4.4） | SPARK-X / nnSVG | conda + renv（`renv.lock`） |
 
-> 说明：R 环境基于 conda R (env_R)，所有 R 包由 **renv** 统一管理（`renv.lock` + `renv/library/`）。R 脚本在项目根目录运行时，`.Rprofile` 自动激活 renv。HPC 迁移时仅需复制项目目录并执行 `renv::restore()`。
+- 两个 conda 环境由 [setup_linux_env.sh](setup_linux_env.sh) 一键构建。
+- 流水线脚本 [models_benchmark.sh](src/pipeline/models_benchmark.sh) 会自动探测
+  上述 conda 环境中的解释器，也支持用环境变量显式覆盖。
+- R 方法需在项目根目录运行以触发 `.Rprofile` 自动激活 renv。
 
-## 使用方法
+## 快速开始
 
-### 完整流水线（四方法 + 前处理 + 评估）
+### 1. 构建环境
 
-**PowerShell（推荐，Windows 原生）：**
-
-```powershell
-# 默认数据集 mouse_brain_STARmap
-.\src\pipeline\run_benchmark.ps1
-
-# 指定数据集
-.\src\pipeline\run_benchmark.ps1 -dataset mouse_brain_STARmap
-
-# 指定方法子集
-.\src\pipeline\run_benchmark.ps1 -dataset mouse_brain_STARmap -methods spagcn,spaseg
-
-# 自定义输出目录
-.\src\pipeline\run_benchmark.ps1 -outdir .\results\my_run -sample my_sample
-
-.\src\pipeline\run_benchmark.ps1 -outdir ".\results\unified_env" -sample "unified_env" -device "auto"
-```
-
-**Bash（需 WSL / Git Bash）：**
+前置：已安装 conda/mamba 且 `conda` 在 `PATH` 中（conda ≥ 23 默认启用 libmamba solver）。
 
 ```bash
+bash setup_linux_env.sh                    # 同时构建 Python + R（默认）
+bash setup_linux_env.sh --python-only      # 仅 Python（SpaGCN / SpaSEG）
+bash setup_linux_env.sh --r-only           # 仅 R（SPARK-X / nnSVG）
+bash setup_linux_env.sh --device cpu       # 强制 CPU 版 torch（默认 auto 自动探测 CUDA）
+```
+
+`--device` 取值：`auto`（默认，有 `nvidia-smi` 则装 CUDA 版 torch，否则 CPU 版）、
+`cuda`、`cpu`。
+
+### 2. 运行流水线
+
+```bash
+conda activate spatial          # 让脚本探测到解释器（也可用环境变量，见下）
+
+# 默认数据集 mouse_brain_STARmap，四个方法全跑（含前处理 + 评估）
 bash src/pipeline/models_benchmark.sh
-bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
-bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods spagcn,spaseg
+
+# 指定数据集 / 方法子集
+bash src/pipeline/models_benchmark.sh --dataset MERFISH_Moffitt
+bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods spagcn,nnsvg
+
+# 指定核数（nnSVG 并行）与设备（Python 深度学习模型）
+bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap \
+  --methods nnsvg --cores 32 --device cuda
+
+# 只跑前处理（跳过方法），或只跑方法（复用已生成数据）
+bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods spark --skip-eval
 ```
 
-### 分步运行
+结果写入 `results/local_results/<dataset>/<方法子目录>/`，日志在
+`results/local_results/<dataset>/logs/`。
+
+### 3. 不激活环境、直接指定解释器
 
 ```bash
-# 1) 共同前处理
-python src/preprocess/h5ad_preprocess.py --dataset mouse_brain_STARmap
-
-# 2) R 方法（在项目根目录运行，renv 自动激活）
-Rscript src/r_models/run_spark.r  <outdir>/SPARK_X  <sample>
-Rscript src/r_models/run_nnSVG.r  <outdir>/nnSVG    <sample>
-
-# 3) Python 方法
-python src/py_models/run_spaGCN.py --dataset mouse_brain_STARmap
-python src/py_models/run_spaSEG.py --dataset mouse_brain_STARmap
-
-# 4) 评估
-python src/utils/evaluation.py --dataset mouse_brain_STARmap
+SVG_PYTHON=$HOME/miniconda3/envs/spatial/bin/python \
+SVG_RSCRIPT=$HOME/miniconda3/envs/spatial_R/bin/Rscript \
+bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 ```
+
+## 脚本参数
+
+### models_benchmark.sh
+
+| 参数 | 说明 |
+|---|---|
+| `--dataset KEY` | 数据集 key（默认 `mouse_brain_STARmap`，见 `configs/datasets.json`） |
+| `--h5ad PATH` | 输入 h5ad（覆盖 dataset 注册值） |
+| `--spatial PATH` | 坐标文件（`tissue_positions.csv` / `spatial.tar.gz`，可选） |
+| `--outdir PATH` | 输出根目录（默认 `results/local_results/<dataset>`） |
+| `--sample NAME` | 样本标签（默认取 dataset 注册值） |
+| `--methods LIST` | 逗号分隔方法子集（默认全部 `spark,nnsvg,spagcn,spaseg`） |
+| `--cores N` | nnSVG 并行线程数（仅 Linux HPC；默认按核数与可用内存自适应） |
+| `--device DEV` | 深度学习设备 `auto/cuda/cpu`（默认 `auto`） |
+| `--skip-preprocess` | 跳过共同前处理（要求数据已生成） |
+| `--skip-eval` | 跳过最后的 `evaluation.py` 汇总 |
 
 ### 环境变量
 
-- `SVG_PYTHON` — 指定 Python 解释器（默认 `env_spatial/python.exe`）
-- `SVG_RSCRIPT` — 指定 Rscript 路径（默认 `env_R/lib/R/bin/Rscript.exe`）
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `SVG_PYTHON` | 覆盖 Python 解释器 | 自动探测 conda `spatial` |
+| `SVG_RSCRIPT` | 覆盖 Rscript 路径 | 自动探测 conda `spatial_R` |
+| `CONDA` | `setup_linux_env.sh` 用的 conda 命令 | `conda` |
+| `DEVICE` | `setup_linux_env.sh` torch 设备（auto/cuda/cpu） | `auto` |
+| `PY_ENV_NAME` | Python conda 环境名 | `spatial` |
+| `R_ENV_NAME` | R conda 环境名 | `spatial_R` |
+
+## 数据集
+
+`configs/datasets.json` 中注册的数据集 key：
+
+```
+mouse_brain_STARmap            STARmap / 2D（默认）
+Visium_Mouse_Olfactory_Bulb    Visium / 2D
+DLPFC_151507 ~ DLPFC_151510    10x Visium / 2D
+MERFISH_Moffitt                MERFISH / 2D
+Visium_HD_Mouse_Kidney         Visium HD / 2D
+STARmap_AD_13m_ctrl_rep1       STARmap / 2D
+Stereo_seq_drosophila          stereo-seq / 3D（仅 SPARK-X）
+Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
+```
 
 ## 项目结构
 
 ```
-src/
-├── pipeline/
-│   ├── models_benchmark.sh    # 主控流水线脚本 (Bash)
-│   └── run_benchmark.ps1      # 主控流水线脚本 (PowerShell)
-├── preprocess/h5ad_preprocess.py  # 共同前处理
-├── r_models/
-│   ├── run_spark.r                # SPARK-X
-│   └── run_nnSVG.r                # nnSVG
-├── py_models/
-│   ├── run_spaGCN.py              # SpaGCN
-│   └── run_spaSEG.py              # SpaSEG
-└── utils/evaluation.py            # 评估指标汇总
+.
+├── setup_linux_env.sh                 # Linux/HPC 一键环境构建（conda + renv）
+├── requirements.txt                   # Python 依赖
+├── renv.lock                          # R 依赖锁文件
+├── .Rprofile                          # 进入项目根自动激活 renv
+├── configs/
+│   ├── datasets.json                  # 数据集注册表
+│   └── model_params/                  # 各方法超参数
+├── data/                              # 输入 h5ad（各技术子目录）
+├── results/local_results/             # 输出（每数据集一目录）
+└── src/
+    ├── __init__.py                    # 路径/常量/数据集注册/共同前处理核心
+    ├── pipeline/
+    │   ├── models_benchmark.sh        # 主控流水线脚本（Bash，Linux/HPC）
+    │   └── run_benchmark.ps1          # 旧版主控脚本（PowerShell，Windows 遗留）
+    ├── preprocess/h5ad_preprocess.py  # 共同前处理 CLI
+    ├── r_models/
+    │   ├── run_spark.r                # SPARK-X
+    │   └── run_nnSVG.r                # nnSVG
+    ├── py_models/
+    │   ├── run_spaGCN.py              # SpaGCN
+    │   └── run_spaSEG.py              # SpaSEG
+    └── utils/evaluation.py            # 评估指标汇总
 ```
+
+## HPC 提交说明
+
+1. conda 环境含绝对路径、不可跨节点搬移，需在 HPC 各节点分别执行
+   `bash setup_linux_env.sh` 原地重建（代码随项目目录迁移）。
+2. 平台 Slurm 队列、存储配额、作业模板等合规要求见 [docs/HPC_note.md](docs/HPC_note.md)。
+3. 深度学习方法（SpaGCN / SpaSEG）建议申请 GPU 队列并用
+   `--device cuda`；SPARK-X / nnSVG 用 CPU 队列并给 nnSVG 指定 `--cores`。
+4. nnSVG 默认并行核数按「核数 ∩ 可用内存（每 worker 约 1.5GB）」自适应，避免小内存
+   节点 OOM；大内存节点显式传 `--cores N` 以获得更高并行度。

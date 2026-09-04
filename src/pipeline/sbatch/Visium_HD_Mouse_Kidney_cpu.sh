@@ -7,7 +7,7 @@
 #SBATCH -o hd_kidney_cpu.%j.out
 #SBATCH -e hd_kidney_cpu.%j.err
 
-# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因，1.7GB）：前处理 + SPARK-X + nnSVG
+# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因）：SPARK-X + nnSVG（前处理已由 preprocess 脚本单独完成）
 # 注意：nnSVG 逐基因 BRISC 在此规模极慢（可能数小时~数十小时），日志里会分别打印各步耗时。
 set -euo pipefail
 cd ~/svg_methods
@@ -19,4 +19,4 @@ bash src/pipeline/models_benchmark.sh \
   --dataset Visium_HD_Mouse_Kidney \
   --methods spark,nnsvg \
   --cores 64 \
-  --skip-eval
+  --skip-preprocess --skip-eval

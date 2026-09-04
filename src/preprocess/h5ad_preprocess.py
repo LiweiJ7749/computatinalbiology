@@ -13,7 +13,7 @@ pipeline（src/pipeline/models_benchmark.sh）使用：
        SpaGCN          : <sample>_spaGCN.h5ad（obs 坐标列 + 组织学图像，可选）
        SpaSEG          : <sample>_spaSEG.h5ad（obsm["spatial"]）
 
-用法（在项目根目录下，用 env_spatial 的 python）::
+用法（在项目根目录下，用 envs/spatial 的 python）::
 
     # 数据集注册表里的 key（默认 mouse_brain_STARmap）
     python src/preprocess/h5ad_preprocess.py --dataset mouse_brain_STARmap

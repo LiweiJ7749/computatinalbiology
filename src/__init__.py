@@ -43,17 +43,13 @@ DATA_DIR = ROOT / "data"
 RESULTS_DIR = ROOT / "results" / "local_results"
 SRC_DIR = ROOT / "src"
 
-# 解释器候选（Windows .exe 与 Linux/POSIX 均覆盖）：find_python/find_rscript 按序探测。
+# 解释器候选（Linux/WSL/HPC 项目内 conda 前缀）：find_python/find_rscript 按序探测。
 PYTHON_CANDIDATES = (
-    ROOT / "env_spatial" / "bin" / "python",               # Linux conda env
-    ROOT / "env_spatial" / "bin" / "python3",
-    ROOT / "env_spatial_linux" / "bin" / "python",
-    ROOT / "env_spatial" / "python.exe",                   # Windows conda env
+    ROOT / "envs" / "spatial" / "bin" / "python",     # 项目内 conda 前缀（setup_linux_env.sh）
+    ROOT / "envs" / "spatial" / "bin" / "python3",
 )
 RSCRIPT_CANDIDATES = (
-    ROOT / "env_R" / "bin" / "Rscript",                    # Linux conda R
-    ROOT / "env_R_linux" / "bin" / "Rscript",
-    ROOT / "env_R" / "lib" / "R" / "bin" / "Rscript.exe",  # Windows conda R
+    ROOT / "envs" / "spatial_R" / "bin" / "Rscript",
 )
 
 # ---------------------------------------------------------------------------
@@ -357,7 +353,7 @@ def ensure_run_dirs(run: dict, methods=None) -> None:
 # 5) 环境探测（供 pipeline .sh 或交互式调用）
 # ---------------------------------------------------------------------------
 def find_python():
-    """返回可用的 python 解释器路径（优先本项目 env_spatial，其次 PATH）。"""
+    """返回可用的 python 解释器路径（优先本项目 envs/spatial，其次 PATH）。"""
     for c in PYTHON_CANDIDATES:
         if c.exists():
             return str(c)
@@ -369,7 +365,7 @@ def find_python():
 
 
 def find_rscript():
-    """返回可用的 Rscript 路径（优先本项目 env_R，其次 PATH）。"""
+    """返回可用的 Rscript 路径（优先本项目 envs/spatial_R，其次 PATH）。"""
     for c in RSCRIPT_CANDIDATES:
         if c.exists():
             return str(c)
@@ -377,20 +373,16 @@ def find_rscript():
 
 
 def external_src_dir(name):
-    """返回外部方法源码目录（如 ``SpaGCN_src`` / ``SpaSEG_src``）。
+    """返回 vendor 的方法源码目录（如 ``SpaGCN_src`` / ``SpaSEG_src``）。
 
-    这些源码为纯 Python、平台无关，Windows 与 Linux 共用同一份；默认优先
-    ``env_spatial``、其次 ``env_spatial_linux``，也可用环境变量 ``SVG_EXT_DIR``
-    覆盖（HPC/Linux 上无需把解释器路径写死进模型脚本）。
+    这些源码为纯 Python、平台无关，已随仓库 vendor 于 ``src/vendor/<name>``
+    （运行所需最小子集，见 setup_linux_env.sh），也可用环境变量 ``SVG_EXT_DIR``
+    覆盖到自定义目录（HPC 上无需把解释器路径写死进模型脚本）。
     """
     base = os.environ.get("SVG_EXT_DIR")
     if base:
         return Path(base) / name
-    for cand in (ROOT / "env_spatial", ROOT / "env_spatial_linux"):
-        p = cand / name
-        if p.exists():
-            return p
-    return ROOT / "env_spatial" / name
+    return ROOT / "src" / "vendor" / name
 
 
 # ---------------------------------------------------------------------------

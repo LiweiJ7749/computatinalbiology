@@ -13,9 +13,9 @@ run_spaGCN.py —— SpaGCN 方法：SVG 检测（工程化/批量化版本）
   5. 输出 SVG_spaGCN_<sample>.csv + 域划分图 + Top SVG 空间表达图。
 
 深度学习设备：默认 auto（有 CUDA 用 GPU，否则 CPU+警告）；可用 --device 强制。
-SpaGCN 使用本地 GPU 补丁源码 env_spatial/SpaGCN_src（勿用 site-packages CPU 版）。
+SpaGCN 使用本地 GPU 补丁源码 src/vendor/SpaGCN_src（勿用 site-packages CPU 版）。
 
-用法（在项目根下，用 env_spatial 的 python）：
+用法（在项目根下，用 envs/spatial 的 python）：
     python src/py_models/run_spaGCN.py --dataset mouse_brain_STARmap
     python src/py_models/run_spaGCN.py --h5ad ./data/.../x.h5ad --outdir ./results/local_results/my_run --sample my
 """

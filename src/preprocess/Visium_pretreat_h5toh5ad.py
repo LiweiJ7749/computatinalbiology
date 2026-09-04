@@ -3,7 +3,7 @@
 将 10x 格式的 filtered_feature_bc_matrix.h5 统一转换为通用 .h5ad 文件，
 供后续 SVG 检测方法对比使用。
 
-依赖（已在 env_spatial 中安装）：scanpy / anndata / h5py / scipy。
+依赖（已在 envs/spatial 中安装）：scanpy / anndata / h5py / scipy。
 
 用法（在项目根目录 F:\\computatinalbiology 下）:
     # 转换默认的 Mouse_Olf_Bulb 数据（输出到 data 目录，已被 .gitignore 忽略）

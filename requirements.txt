@@ -19,7 +19,7 @@
 #               igraph>=0.10,<0.11（替代旧 python-igraph），故不再锁旧包名
 #   5. cell2location -> 仅 SpaSEG 下游"细胞反卷积"分析需要，且依赖 jax
 #               （Windows 兼容差，是已知环境冲突源），默认注释，按需启用
-#   6. GPU 化：SpaGCN 使用本地补丁源码 env_spatial/SpaGCN_src（run 脚本
+#   6. GPU 化：SpaGCN 使用本地补丁源码 src/vendor/SpaGCN_src（run 脚本
 #              通过 sys.path 优先加载），SpaSEG 原生支持 device 参数。
 # ============================================================
 

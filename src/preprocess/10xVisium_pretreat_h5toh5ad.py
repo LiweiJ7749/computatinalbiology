@@ -13,7 +13,7 @@ SVG 检测方法对比使用。
     - 仅保留组织内 bin（masks/square_XXXum）。
     - spatial.tar.gz 里的 H&E 图像提取后存入 adata.uns['spatial'] 供可视化。
 
-依赖（env_spatial 已装）：h5py / numpy / scipy / scanpy / matplotlib。
+依赖（envs/spatial 已装）：h5py / numpy / scipy / scanpy / matplotlib。
 
 用法（项目根目录）:
     python ./src/preprocess/10xVisium_pretreat_h5toh5ad.py \\

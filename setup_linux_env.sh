@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup_linux_env.sh —— 在 Linux / WSL 上构建本项目的原生运行时环境
+# setup_linux_env.sh —— 在 Linux / WSL / HPC 上构建本项目运行时环境（仅 Linux）
 # =============================================================================
-# 目标：把本项目的四个 SVG 方法（SPARK-X / nnSVG / SpaGCN / SpaSEG）从 Windows
-# 原生解释器（env_spatial/python.exe、env_R/.../Rscript.exe）切换到 Linux 原生
-# 运行时，用于 HPC 大规模数据处理。
+# 项目为纯 Linux/HPC 工作流（Windows 支持已移除）。本脚本在项目目录内创建
+# conda 环境（conda create -p），并把四方法统一跑在 `envs/` 前缀下，便于随
+# 项目目录一起管理 / 在 HPC 各节点原地重建。
 #
-# 产物：
-#   - conda 环境 `spatial`   ：Python 3.9 + 全部 Python 依赖（SpaGCN / SpaSEG）
-#   - conda 环境 `spatial_R` ：R 4.4.x + renv 管理的 R 包（SPARK / nnSVG）
-#   - 项目内 env_spatial_linux/SpaGCN_src、SpaSEG_src：纯 Python 外部源码（平台无关）
+# 产物（都在项目目录下，路径随项目迁移）：
+#   - envs/spatial    ：Python 3.9 + 全部 Python 依赖（SpaGCN / SpaSEG + 前处理）
+#   - envs/spatial_R  ：R 4.3.1 + r-recommended + renv 管理的 R 包（SPARK-X/nnSVG，Bioc 3.18）
+#   - src/vendor/     ：SpaGCN_src / SpaSEG_src 运行所需纯 Python 源码（已随仓库纳入版本控制）
 #
 # 依赖：已安装的 conda/mamba（conda>=23 默认启用 libmamba solver，速度足够）。
 # 说明：conda 环境含绝对路径、不可跨机器搬移；本脚本设计为“可复现”，即在 WSL 或
-#       HPC 各节点上分别执行本脚本即可原地重建环境，代码随项目目录迁移。
+#       HPC 各节点上分别执行本脚本即可在各自项目目录下原地重建环境。
 #
 # 用法：
-#   bash setup_linux_env.sh              # 同时构建 Python 与 R
+#   bash setup_linux_env.sh              # 同时构建 Python 与 R（默认）
 #   bash setup_linux_env.sh --python-only
 #   bash setup_linux_env.sh --r-only
-#   bash setup_linux_env.sh --device cpu   # 强制 CPU 版 torch（默认 auto 自动探测 CUDA）
+#   bash setup_linux_env.sh --device cpu # 强制 CPU 版 torch（默认 auto 自动探测 CUDA）
 #
 # 环境变量（可选覆盖）：
-#   CONDA / DEVICE / PY_ENV_NAME / R_ENV_NAME
+#   CONDA / DEVICE / ENVS_DIR
 # =============================================================================
 set -euo pipefail
 
@@ -33,8 +33,11 @@ cd "$ROOT"
 CONDA="${CONDA:-conda}"
 DEVICE="${DEVICE:-auto}"
 ONLY="all"
-PY_ENV_NAME="${PY_ENV_NAME:-spatial}"
-R_ENV_NAME="${R_ENV_NAME:-spatial_R}"
+ENVS_DIR="${ENVS_DIR:-$ROOT/envs}"          # conda 前缀根目录（默认项目内 envs/）
+PY_PREFIX="$ENVS_DIR/spatial"
+R_PREFIX="$ENVS_DIR/spatial_R"
+PYBIN="$PY_PREFIX/bin/python"
+RSCRIPT="$R_PREFIX/bin/Rscript"
 
 # ---------------- 参数解析 ----------------
 while [ $# -gt 0 ]; do
@@ -42,7 +45,7 @@ while [ $# -gt 0 ]; do
     --python-only) ONLY="python"; shift ;;
     --r-only)      ONLY="r"; shift ;;
     --device)      DEVICE="${2:-auto}"; shift 2 ;;
-    -h|--help)     sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "[错误] 未知参数: $1" >&2; exit 1 ;;
   esac
 done
@@ -53,19 +56,16 @@ section() { printf '\n========================================\n  [%s] %s\n=====
 
 command -v "$CONDA" >/dev/null 2>&1 || { echo "[错误] 找不到 $CONDA，请先安装 miniconda/miniforge" >&2; exit 2; }
 CONDA_BASE="$("$CONDA" info --base)"
-PYBIN="$CONDA_BASE/envs/$PY_ENV_NAME/bin/python"
-RSCRIPT="$CONDA_BASE/envs/$R_ENV_NAME/bin/Rscript"
-EXT_DIR="$ROOT/env_spatial_linux"
 
 # ---------------------------------------------------------------------------
-# 阶段 1：Python 环境（conda env `spatial` + 外部源码）
+# 阶段 1：Python 环境（conda prefix envs/spatial + pip 依赖）
 # ---------------------------------------------------------------------------
 build_python() {
-  section "构建 Python 环境: $PY_ENV_NAME"
+  section "构建 Python 环境: $PY_PREFIX"
   if [ -x "$PYBIN" ]; then
-    log "已存在 $PYBIN，跳过创建（如需重建请先 conda env remove -n $PY_ENV_NAME）"
+    log "已存在 $PYBIN，跳过创建（如需重建先 conda env remove -p $PY_PREFIX）"
   else
-    "$CONDA" create -n "$PY_ENV_NAME" python=3.9 pip -y
+    "$CONDA" create -p "$PY_PREFIX" python=3.9 pip -y
   fi
 
   # 探测 CUDA：auto -> 有 nvidia-smi 且可用则装 cu124，否则 CPU
@@ -109,54 +109,48 @@ build_python() {
   "$PYBIN" -m pip install -r /tmp/svg_reqs.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple/ || log "[警告] 部分依赖安装失败，将继续"
 
-  # 外部源码（SpaGCN_src / SpaSEG_src）为纯 Python、平台无关；复制到项目内
-  # env_spatial_linux/，使其随项目目录迁移、与解析器所在 conda 环境解耦。
-  if [ -d "$ROOT/env_spatial" ]; then
-    for s in SpaGCN_src SpaSEG_src; do
-      if [ -d "$ROOT/env_spatial/$s" ] && [ ! -e "$EXT_DIR/$s" ]; then
-        mkdir -p "$EXT_DIR"
-        log "复制外部源码 $s -> $EXT_DIR/$s"
-        cp -r "$ROOT/env_spatial/$s" "$EXT_DIR/$s"
-      fi
-    done
-  fi
-
+  # 外部方法源码已 vendor 于 src/vendor/（见 external_src_dir），无需再复制环境目录。
   log "Python 环境就绪: $PYBIN"
   "$PYBIN" -c "import sys, numpy, scanpy, torch; print('  python', sys.version.split()[0], '| numpy', numpy.__version__, '| scanpy', scanpy.__version__, '| torch', torch.__version__)"
 }
 
 # ---------------------------------------------------------------------------
-# 阶段 2：R 环境（conda env `spatial_R`，renv 管理包）
+# 阶段 2：R 环境（conda prefix envs/spatial_R，renv 管理包）
 # ---------------------------------------------------------------------------
 build_r() {
-  section "构建 R 环境: $R_ENV_NAME"
+  section "构建 R 环境: $R_PREFIX"
   if [ -x "$RSCRIPT" ]; then
     log "已存在 $RSCRIPT，跳过创建"
-    # 已存在的环境也补齐系统编译依赖（幂等）
-    "$CONDA" install -n "$R_ENV_NAME" -c conda-forge zlib xz imagemagick -y || true
+    # 已存在的环境也补齐系统编译依赖与 R 推荐包（幂等）
+    "$CONDA" install -p "$R_PREFIX" -c conda-forge zlib xz imagemagick "r-recommended=4.3" -y || true
   else
-    # 优先匹配 renv.lock 的 R 4.4；conda-forge 若未提供 4.4.3 则回退 4.4。
+    # 匹配 renv.lock 的 R 4.3.1（HPC 平台仅提供 R<=4.3.1，故统一降级）。
+    # r-recommended 提供 R 推荐包（Matrix/lattice/MASS/...）：Bioc 源码包编译需
+    # 链接 site 库中的 Matrix，故必须与 r-base 一起装，否则 restore 会失败。
     # 一并安装 zlib/xz/imagemagick 开发包（renv::restore 从源码编译 XVector 等
     # Bioc 包需要 zlib.h/lzma.h，magick 包需要 ImageMagick 的 Magick++ 头）。
-    log "创建 conda R 环境（r-base 4.4 + zlib/xz/imagemagick）"
-    "$CONDA" create -n "$R_ENV_NAME" -c conda-forge "r-base=4.4" zlib xz imagemagick -y
+    log "创建 conda R 环境（r-base 4.3.1 + r-recommended + zlib/xz/imagemagick）"
+    "$CONDA" create -p "$R_PREFIX" -c conda-forge "r-base=4.3.1" "r-recommended=4.3" zlib xz imagemagick -y
   fi
 
   # 激活环境：conda 包安装的 R 默认用前缀编译器
   # (x86_64-conda-linux-gnu-cc/c++/gfortran)，这些只有激活后才会进入 PATH，
   # 否则 renv::restore 从源码编译 C/C++ 包会报 "compiler not found"。
   source "$CONDA_BASE/etc/profile.d/conda.sh" 2>/dev/null || true
-  conda activate "$R_ENV_NAME" 2>/dev/null || true
+  conda activate "$R_PREFIX" 2>/dev/null || true
 
   # SPARK(pkg Makevars 强制 CXX_STD=CXX11) 新版 RcppArmadillo 要求 C++14，
   # 否则报 "C++14 compiler required"。全局把 CXX11STD 提到 C++14（向后兼容 C++11）。
   mkdir -p "$HOME/.R"
   printf 'CXX11STD = -std=gnu++14\n' > "$HOME/.R/Makevars"
 
-  log "安装 renv 并 restore（读取 renv.lock）"
-  Rscript -e 'if (!requireNamespace("renv", quietly=TRUE)) install.packages("renv", repos="https://mirrors.tuna.tsinghua.edu.cn/CRAN")' || true
-  # 在项目根执行以便 .Rprofile 自动激活 renv
-  ( cd "$ROOT" && Rscript -e 'renv::restore(prompt = FALSE)' )
+  log "安装 renv（写入本 conda 前缀 site 库；项目 .Rprofile 不再走 activate）"
+  RENV_CONFIG_AUTOLOADER_ENABLED=FALSE Rscript --vanilla -e 'if (!requireNamespace("renv", quietly=TRUE)) install.packages("renv", repos="https://mirrors.tuna.tsinghua.edu.cn/CRAN")' || true
+  log "renv::restore（读取 renv.lock 构建项目库 renv/library/）"
+  # 显式 library(renv) + 指定项目根，避免 .Rprofile/activate 联网加载；Bioc 版本
+  # 与锁文件保持一致（renv/ 目录被 .gitignore，克隆到 HPC 时 settings.json 不会
+  # 随 git 同步，故在此幂等校正为 3.18）。
+  ( cd "$ROOT" && Rscript --vanilla -e 'library(renv); renv::settings$bioconductor.version("3.18"); renv::restore(prompt = FALSE)' )
 
   log "R 环境就绪: $RSCRIPT"
   "$RSCRIPT" -e 'cat("  R", as.character(getRversion()), "| renv", as.character(packageVersion("renv")), "\n")'
@@ -173,15 +167,17 @@ esac
 
 section "完成"
 cat <<EOF
-  环境已构建完成。运行流水线（先激活环境，解释器会自动被 PATH 探测到）：
+  环境已构建完成（项目内前缀：$ENVS_DIR）。
 
-    conda activate $PY_ENV_NAME
-    bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
-
-  或直接指定解释器（无需激活）：
+  运行流水线（建议直接指定解释器，无需激活任何环境）：
 
     SVG_PYTHON=$PYBIN SVG_RSCRIPT=$RSCRIPT \\
       bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 
-  R 方法（SPARK/nnSVG）需在项目根目录运行以自动激活 renv（.Rprofile）。
+  或先激活再运行（脚本也能自动探测到）：
+
+    conda activate $PY_PREFIX
+    bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
+
+  R 方法（SPARK-X / nnSVG）需在项目根目录运行以挂载 renv 项目库（.Rprofile）。
 EOF

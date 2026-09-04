@@ -30,15 +30,19 @@
 
 ## 运行环境（Linux / HPC 原生）
 
-| 环境 | 用途 | 包管理 |
+| 环境（项目内前缀） | 用途 | 包管理 |
 |---|---|---|
-| `spatial`（Python 3.9） | SpaGCN / SpaSEG + 前处理 | conda + pip（`requirements.txt`），torch 自动探测 CUDA |
-| `spatial_R`（R 4.4） | SPARK-X / nnSVG | conda + renv（`renv.lock`） |
+| `envs/spatial`（Python 3.9） | SpaGCN / SpaSEG + 前处理 | conda + pip（`requirements.txt`），torch 自动探测 CUDA |
+| `envs/spatial_R`（R 4.3.1 / Bioc 3.18） | SPARK-X / nnSVG | conda + renv（`renv.lock`） |
 
-- 两个 conda 环境由 [setup_linux_env.sh](setup_linux_env.sh) 一键构建。
+- 两个 conda 环境用 `conda create -p` 建在项目 `envs/` 下，由
+  [setup_linux_env.sh](setup_linux_env.sh) 一键构建。conda 环境含绝对路径、不可
+  跨机器搬移，WSL / HPC 各机器在各自项目目录执行该脚本即可原地重建。
 - 流水线脚本 [models_benchmark.sh](src/pipeline/models_benchmark.sh) 会自动探测
-  上述 conda 环境中的解释器，也支持用环境变量显式覆盖。
+  上述环境中的解释器，也支持用 `SVG_PYTHON` / `SVG_RSCRIPT` 显式覆盖。
 - R 方法需在项目根目录运行以触发 `.Rprofile` 自动激活 renv。
+- 外部方法源码（SpaGCN / SpaSEG 的本地补丁版）随仓库存放在 `src/vendor/`，与
+  解释器环境解耦（`src.external_src_dir`，可用 `SVG_EXT_DIR` 覆盖）。
 
 ## 快速开始
 
@@ -59,9 +63,7 @@ bash setup_linux_env.sh --device cpu       # 强制 CPU 版 torch（默认 auto 
 ### 2. 运行流水线
 
 ```bash
-conda activate spatial          # 让脚本探测到解释器（也可用环境变量，见下）
-
-# 默认数据集 mouse_brain_STARmap，四个方法全跑（含前处理 + 评估）
+# 脚本会自动探测项目 envs/spatial 与 envs/spatial_R（也可用环境变量 SVG_PYTHON/SVG_RSCRIPT）
 bash src/pipeline/models_benchmark.sh
 
 # 指定数据集 / 方法子集
@@ -82,8 +84,8 @@ bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods sp
 ### 3. 不激活环境、直接指定解释器
 
 ```bash
-SVG_PYTHON=$HOME/miniconda3/envs/spatial/bin/python \
-SVG_RSCRIPT=$HOME/miniconda3/envs/spatial_R/bin/Rscript \
+SVG_PYTHON=$PWD/envs/spatial/bin/python \
+SVG_RSCRIPT=$PWD/envs/spatial_R/bin/Rscript \
 bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 ```
 
@@ -108,12 +110,11 @@ bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `SVG_PYTHON` | 覆盖 Python 解释器 | 自动探测 conda `spatial` |
-| `SVG_RSCRIPT` | 覆盖 Rscript 路径 | 自动探测 conda `spatial_R` |
+| `SVG_PYTHON` | 覆盖 Python 解释器 | 自动探测项目 `envs/spatial` |
+| `SVG_RSCRIPT` | 覆盖 Rscript 路径 | 自动探测项目 `envs/spatial_R` |
 | `CONDA` | `setup_linux_env.sh` 用的 conda 命令 | `conda` |
 | `DEVICE` | `setup_linux_env.sh` torch 设备（auto/cuda/cpu） | `auto` |
-| `PY_ENV_NAME` | Python conda 环境名 | `spatial` |
-| `R_ENV_NAME` | R conda 环境名 | `spatial_R` |
+| `ENVS_DIR` | `setup_linux_env.sh` conda 前缀根目录 | 项目 `envs/` |
 
 ## 数据集
 
@@ -137,17 +138,16 @@ Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
 ├── setup_linux_env.sh                 # Linux/HPC 一键环境构建（conda + renv）
 ├── requirements.txt                   # Python 依赖
 ├── renv.lock                          # R 依赖锁文件
-├── .Rprofile                          # 进入项目根自动激活 renv
+├── .Rprofile                          # 进入项目根自动挂载 renv 项目库
 ├── configs/
 │   ├── datasets.json                  # 数据集注册表
 │   └── model_params/                  # 各方法超参数
 ├── data/                              # 输入 h5ad（各技术子目录）
+├── envs/                              # conda 前缀（gitignore，由 setup 脚本重建）
 ├── results/local_results/             # 输出（每数据集一目录）
 └── src/
     ├── __init__.py                    # 路径/常量/数据集注册/共同前处理核心
-    ├── pipeline/
-    │   ├── models_benchmark.sh        # 主控流水线脚本（Bash，Linux/HPC）
-    │   └── run_benchmark.ps1          # 旧版主控脚本（PowerShell，Windows 遗留）
+    ├── pipeline/models_benchmark.sh   # 主控流水线脚本（Bash，Linux/HPC）
     ├── preprocess/h5ad_preprocess.py  # 共同前处理 CLI
     ├── r_models/
     │   ├── run_spark.r                # SPARK-X
@@ -155,6 +155,7 @@ Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
     ├── py_models/
     │   ├── run_spaGCN.py              # SpaGCN
     │   └── run_spaSEG.py              # SpaSEG
+    ├── vendor/                        # SpaGCN_src / SpaSEG_src 运行源码
     └── utils/evaluation.py            # 评估指标汇总
 ```
 

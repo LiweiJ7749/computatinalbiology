@@ -14,9 +14,9 @@
   5. 输出 SVG_spaSEG_<sample>.csv + 空间域图 + Top SVG 空间表达图。
 
 深度学习设备：默认 auto（有 CUDA 用 GPU，否则 CPU+警告）；可用 --device 强制
-cuda/cpu。SpaSEG 使用本地源码 env_spatial/SpaSEG_src（勿用 site-packages 版）。
+cuda/cpu。SpaSEG 使用本地源码 src/vendor/SpaSEG_src（勿用 site-packages 版）。
 
-用法（项目根，用 env_spatial 的 python，先跑 h5ad_preprocess.py 生成输入更佳）：
+用法（项目根，用 envs/spatial 的 python，先跑 h5ad_preprocess.py 生成输入更佳）：
     python src/py_models/run_spaSEG.py --dataset mouse_brain_STARmap
     python src/py_models/run_spaSEG.py --h5ad ./data/.../x.h5ad \\
         --outdir ./results/local_results/my_run --sample my --device cuda

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# models_benchmark.sh —— 四方法(SVG)批量对比主控脚本
+# models_benchmark.sh —— 四方法(SVG)批量对比主控脚本（Linux / WSL / HPC）
 # =============================================================================
 # 依次完成：
 #   0) 解析 run 配置（dataset/outdir/sample，经 src.resolve_run 归一）
@@ -15,14 +15,13 @@
 #   4) 最后调用 src/utils/evaluation.py
 #
 # 说明：
-#   - R 依赖 renv 项目锁（在项目根 .Rprofile 自动激活），故所有子命令都在
+#   - R 依赖 renv 项目库（项目根 .Rprofile 自动挂载），故所有子命令都在
 #     $ROOT 目录下执行。
-#   - R 解释器：优先 SVG_RSCRIPT 环境变量，然后环境的 env_R/lib/R/bin/Rscript.exe
-#     （conda R 4.4.3，renv 统一管理包），最后回退系统 Rscript。
-#   - Python 解释器：优先 SVG_PYTHON 环境变量，然后 env_spatial/python.exe。
-#   - 跨解释器传参统一用 Windows 路径（cygpath -w），兼容 Cygwin/MSYS。
+#   - R 解释器：优先 SVG_RSCRIPT 环境变量，然后项目内 envs/spatial_R/bin/Rscript
+#     （conda R 4.3.1 + renv 统一管理包），最后回退系统 Rscript。
+#   - Python 解释器：优先 SVG_PYTHON 环境变量，然后项目内 envs/spatial/bin/python。
 #
-# 用法示例（在项目根，env_spatial python + renv R 已就绪）：
+# 用法示例（在项目根）：
 #   bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 #   bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap --methods spagcn,spaseg
 #   bash src/pipeline/models_benchmark.sh --h5ad ./data/.../x.h5ad --outdir ./results/local_results/my --sample my
@@ -51,7 +50,7 @@ usage() {
   --outdir PATH        输出根目录（默认 results/local_results/<dataset>）
   --sample NAME        样本标签（默认取 dataset 注册值）
   --methods LIST       逗号分隔方法子集（默认全部: spark,nnsvg,spagcn,spaseg）
-  --cores N            nnSVG 线程数（仅 Linux/macOS fork 并行生效）
+  --cores N            nnSVG 线程数（Linux fork 并行生效）
   --device DEV         python 模型设备（auto/cuda/cpu，默认 auto）
   --skip-preprocess    跳过共同前处理（要求数据已生成）
   --skip-eval          跳过最后的 evaluation.py 调用
@@ -92,35 +91,18 @@ log_msg()  { echo "  [$(now)] $*"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT"
-# 跨原生解释器传参统一转 Windows 路径（Cygwin 不会自动转换）
-if command -v cygpath >/dev/null 2>&1; then
-  WIN_ROOT="$(cygpath -w "$ROOT")"
-else
-  WIN_ROOT="$ROOT"
-fi
-export SVG_REPO_ROOT="$WIN_ROOT"
-
-# conda 环境探测（Linux/HPC：setup_linux_env.sh 创建的 `spatial` / `spatial_R`）
-CONDA_BASE="$(command -v conda >/dev/null 2>&1 && conda info --base 2>/dev/null || true)"
+export SVG_REPO_ROOT="$ROOT"
 
 PYTHON="${SVG_PYTHON:-}"
 if [ -z "$PYTHON" ]; then
-  for c in "$ROOT/env_spatial/bin/python" "$ROOT/env_spatial/bin/python3" \
-           "$ROOT/env_spatial_linux/bin/python" \
-           "$CONDA_BASE/envs/spatial/bin/python" \
-           "$CONDA_BASE/envs/spatial/bin/python3" \
-           "$ROOT/env_spatial/python.exe"; do
+  for c in "$ROOT/envs/spatial/bin/python" "$ROOT/envs/spatial/bin/python3"; do
     if [ -n "$c" ] && [ -x "$c" ]; then PYTHON="$c"; break; fi
   done
   [ -z "$PYTHON" ] && PYTHON="$(command -v python3 || command -v python || true)"
 fi
 RSCRIPT="${SVG_RSCRIPT:-}"
 if [ -z "$RSCRIPT" ]; then
-  for c in "$ROOT/env_R/bin/Rscript" \
-           "$ROOT/env_R_linux/bin/Rscript" \
-           "$CONDA_BASE/envs/spatial_R/bin/Rscript" \
-           "$ROOT/env_R/lib/R/bin/Rscript.exe" \
-           "D:/R-4.4.3/bin/Rscript.exe"; do
+  for c in "$ROOT/envs/spatial_R/bin/Rscript"; do
     if [ -n "$c" ] && [ -x "$c" ]; then RSCRIPT="$c"; break; fi
   done
   [ -z "$RSCRIPT" ] && RSCRIPT="$(command -v Rscript || true)"
@@ -167,12 +149,12 @@ print("<<<RES>>>sample=" + str(run["sample"]))
 print("<<<RES>>>methods=" + " ".join(run["methods"]))
 PY
 )"
-OUTDIR_WIN="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>outdir=//p')"
+OUTDIR="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>outdir=//p')"
 SAMPLE="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>sample=//p')"
 # 3D 数据集会在 resolve_run 内把方法过滤为仅 spark（4 方法中仅 SPARK-X 支持 3D）
 METHODS="$(printf '%s\n' "$resolved" | sed -n 's/^<<<RES>>>methods=//p')"
 [ -z "$METHODS" ] && { echo "[错误] 请求方法与该数据集维度无交集（dim=3 仅支持 spark）" >&2; exit 1; }
-if [ -z "$OUTDIR_WIN" ] || [ -z "$SAMPLE" ]; then
+if [ -z "$OUTDIR" ] || [ -z "$SAMPLE" ]; then
   echo "[错误] 无法解析 run 配置（dataset=$DATASET）。" >&2
   echo "  - 请检查 src/__init__.py 的 DATASETS 是否含该 key，" >&2
   echo "    或改用 --h5ad/--outdir/--sample 显式指定。" >&2
@@ -180,18 +162,7 @@ if [ -z "$OUTDIR_WIN" ] || [ -z "$SAMPLE" ]; then
   exit 2
 fi
 
-# shell 工具(mkdir/tee/date...)需 POSIX 路径；原生解释器(R/Python)需 Windows 路径
-if command -v cygpath >/dev/null 2>&1; then
-  OUTDIR="$(cygpath -u "$OUTDIR_WIN")"
-else
-  OUTDIR="$OUTDIR_WIN"
-fi
-to_win() {
-  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi
-}
-
 mkdir -p "$OUTDIR/logs"
-LOG_SUMMARY="$OUTDIR/logs/pipeline_summary.log"
 
 log_msg "outdir = $OUTDIR"
 log_msg "sample = $SAMPLE"
@@ -202,30 +173,24 @@ PY_EXTRA=()
 [ -n "$H5AD" ]    && PY_EXTRA+=(--h5ad "$H5AD")
 [ -n "$SPATIAL" ] && PY_EXTRA+=(--spatial "$SPATIAL")
 
-# 组装 R 运行库路径（Windows DLL / Linux 共享库兼容，供 Rscript 动态加载）
-r_env_path() {
-  local p="$PATH"
-  [ -d "$ROOT/env_R/lib" ]              && p="$ROOT/env_R/lib:$p"
-  [ -d "$ROOT/env_R_linux/lib" ]        && p="$ROOT/env_R_linux/lib:$p"
-  [ -d "$ROOT/env_R/Library/bin" ]      && p="$ROOT/env_R/Library/bin:$p"
-  [ -d "$ROOT/env_R/bin" ]              && p="$ROOT/env_R/bin:$p"
-  [ -d "$ROOT/env_R/lib/R/bin" ]        && p="$ROOT/env_R/lib/R/bin:$p"
-  [ -d "D:/R-4.4.3/bin" ]              && p="D:/R-4.4.3/bin:$p"
-  printf '%s' "$p"
-}
-# 在项目根执行 R（触发 renv 自动激活）+ 带上 conda-R 库路径
+# 在项目根执行 R（项目 .Rprofile 已挂载 renv 库）+ 带上 conda R 的 bin/lib 路径
+# （lib 需显式加入，R 包编译期 RPATH 指向各自 conda 前缀，跨前缀运行时靠
+#  LD_LIBRARY_PATH 兜底）。
 run_R() {
-  ( cd "$ROOT" && PATH="$(r_env_path)" "$RSCRIPT" "$@" )
+  ( cd "$ROOT" && \
+    PATH="$ROOT/envs/spatial_R/bin:$PATH" \
+    LD_LIBRARY_PATH="$ROOT/envs/spatial_R/lib:${LD_LIBRARY_PATH:-}" \
+    "$RSCRIPT" "$@" )
 }
 
 # ---------------- 1) 共同前处理 ----------------
 if [ "$SKIP_PRE" -eq 0 ]; then
   log_header "步骤 1/2: 共同前处理 (h5ad_preprocess.py)"
-  PREP_SCRIPT="$WIN_ROOT/src/preprocess/h5ad_preprocess.py"
+  PREP_SCRIPT="$ROOT/src/preprocess/h5ad_preprocess.py"
   # shellcheck disable=SC2086
   "$PYTHON" "$PREP_SCRIPT" --dataset "$DATASET" \
     "${PY_EXTRA[@]}" \
-    --outdir "$OUTDIR_WIN" --sample-name "$SAMPLE" --methods $METHODS \
+    --outdir "$OUTDIR" --sample-name "$SAMPLE" --methods $METHODS \
     2>&1 | tee -a "$OUTDIR/logs/preprocess.log"
   log_msg "前处理完成"
 fi
@@ -237,35 +202,35 @@ for m in $METHODS; do
     spark)
       log_header "SPARK-X: $SAMPLE 运行开始"
       t0="$(date +%s)"
-      run_R "$WIN_ROOT/src/r_models/run_spark.r" \
-          "$OUTDIR_WIN/SPARK_X" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/spark.log"
+      run_R "$ROOT/src/r_models/run_spark.r" \
+          "$OUTDIR/SPARK_X" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/spark.log"
       log_msg "SPARK-X 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     nnsvg)
       log_header "nnSVG: $SAMPLE 运行开始"
       t0="$(date +%s)"
       if [ -n "$CORES" ]; then
-        run_R "$WIN_ROOT/src/r_models/run_nnSVG.r" \
-            "$OUTDIR_WIN/nnSVG" "$SAMPLE" "$CORES" 2>&1 | tee -a "$OUTDIR/logs/nnsvg.log"
+        run_R "$ROOT/src/r_models/run_nnSVG.r" \
+            "$OUTDIR/nnSVG" "$SAMPLE" "$CORES" 2>&1 | tee -a "$OUTDIR/logs/nnsvg.log"
       else
-        run_R "$WIN_ROOT/src/r_models/run_nnSVG.r" \
-            "$OUTDIR_WIN/nnSVG" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/nnsvg.log"
+        run_R "$ROOT/src/r_models/run_nnSVG.r" \
+            "$OUTDIR/nnSVG" "$SAMPLE" 2>&1 | tee -a "$OUTDIR/logs/nnsvg.log"
       fi
       log_msg "nnSVG 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     spagcn)
       log_header "SpaGCN: $SAMPLE 运行开始"
       t0="$(date +%s)"
-      "$PYTHON" "$WIN_ROOT/src/py_models/run_spaGCN.py" --dataset "$DATASET" \
-        "${PY_EXTRA[@]}" --outdir "$OUTDIR_WIN" --sample "$SAMPLE" \
+      "$PYTHON" "$ROOT/src/py_models/run_spaGCN.py" --dataset "$DATASET" \
+        "${PY_EXTRA[@]}" --outdir "$OUTDIR" --sample "$SAMPLE" \
         --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spagcn.log"
       log_msg "SpaGCN 完成（$(( $(date +%s) - t0 ))s）"
       ;;
     spaseg)
       log_header "SpaSEG: $SAMPLE 运行开始"
       t0="$(date +%s)"
-      "$PYTHON" "$WIN_ROOT/src/py_models/run_spaSEG.py" --dataset "$DATASET" \
-        "${PY_EXTRA[@]}" --outdir "$OUTDIR_WIN" --sample "$SAMPLE" \
+      "$PYTHON" "$ROOT/src/py_models/run_spaSEG.py" --dataset "$DATASET" \
+        "${PY_EXTRA[@]}" --outdir "$OUTDIR" --sample "$SAMPLE" \
         --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spaseg.log"
       log_msg "SpaSEG 完成（$(( $(date +%s) - t0 ))s）"
       ;;
@@ -275,9 +240,9 @@ done
 # ---------------- 3) 评估 ----------------
 if [ "$SKIP_EVAL" -eq 0 ]; then
   log_header "步骤 3: 调用 evaluation.py"
-  EVAL_SCRIPT="$WIN_ROOT/src/utils/evaluation.py"
+  EVAL_SCRIPT="$ROOT/src/utils/evaluation.py"
   if [ -f "$EVAL_SCRIPT" ]; then
-    "$PYTHON" "$EVAL_SCRIPT" --dataset "$DATASET" --outdir "$OUTDIR_WIN" \
+    "$PYTHON" "$EVAL_SCRIPT" --dataset "$DATASET" --outdir "$OUTDIR" \
       --sample "$SAMPLE" --methods "$(echo ${METHODS} | tr ' ' ',')" \
       2>&1 | tee -a "$OUTDIR/logs/evaluation.log" || \
       log_msg "[警告] evaluation.py 返回非零"

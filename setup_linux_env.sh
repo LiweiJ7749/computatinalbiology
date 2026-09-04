@@ -132,15 +132,14 @@ build_r() {
   section "构建 R 环境: $R_ENV_NAME"
   if [ -x "$RSCRIPT" ]; then
     log "已存在 $RSCRIPT，跳过创建"
+    # 已存在的环境也补齐系统编译依赖（幂等）
+    "$CONDA" install -n "$R_ENV_NAME" -c conda-forge zlib xz imagemagick -y || true
   else
     # 优先匹配 renv.lock 的 R 4.4；conda-forge 若未提供 4.4.3 则回退 4.4。
     # 一并安装 zlib/xz/imagemagick 开发包（renv::restore 从源码编译 XVector 等
     # Bioc 包需要 zlib.h/lzma.h，magick 包需要 ImageMagick 的 Magick++ 头）。
     log "创建 conda R 环境（r-base 4.4 + zlib/xz/imagemagick）"
     "$CONDA" create -n "$R_ENV_NAME" -c conda-forge "r-base=4.4" zlib xz imagemagick -y
-  else
-    # 已存在的环境也补齐系统编译依赖（幂等）
-    "$CONDA" install -n "$R_ENV_NAME" -c conda-forge zlib xz imagemagick -y || true
   fi
 
   # 激活环境：conda 包安装的 R 默认用前缀编译器

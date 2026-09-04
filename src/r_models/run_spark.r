@@ -133,7 +133,7 @@ top_df$gene <- factor(top_df$gene, levels = rev(top_df$gene))
 p <- ggplot(top_df, aes(x = gene, y = -log10(adjustedPval))) +
   geom_col(fill = "steelblue") +
   coord_flip() +
-  labs(title = "SPARK-X: Top SVG genes (mouse_brain_STARmap)",
+  labs(title = sprintf("SPARK-X: Top SVG genes (%s)", sample),
        x = "Gene", y = "-log10(adjusted P-value)") +
   theme_minimal(base_size = 11) +
   theme(plot.title = element_text(hjust = 0.5))

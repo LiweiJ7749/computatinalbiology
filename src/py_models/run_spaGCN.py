@@ -52,13 +52,14 @@ PARAMS = _load_params()
 
 
 def _resolve_inputs(args):
-    """解析 run 配置，返回 (adata路径, outdir, sample, 参数字典)。"""
+    """解析 run 配置，返回 (adata路径, outdir, sample, tech)。"""
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
                           sample=args.sample, methods=["spagcn"])
     src.ensure_run_dirs(run)
     outdir = run["method_dirs"]["spagcn"]
     sample = run["sample"]
+    tech = run.get("tech") or ""
     # 优先：共同前处理生成的 <sample>_spaGCN.h5ad（X=counts + obs x/y）
     prepared = outdir / f"{sample}_spaGCN.h5ad"
     h5ad_in = prepared if prepared.exists() else run["h5ad"]
@@ -66,7 +67,7 @@ def _resolve_inputs(args):
         src.log_message(f"使用前处理产物: {prepared}")
     else:
         src.log_message(f"未发现 {prepared}，回退读原始 h5ad: {run['h5ad']}")
-    return h5ad_in, outdir, sample
+    return h5ad_in, outdir, sample, tech
 
 
 def _pick_device(arg: str) -> str:
@@ -139,11 +140,37 @@ def _prefilter_specialgenes(adata):
 # ---------------------------------------------------------------------------
 # 聚类
 # ---------------------------------------------------------------------------
-def train_domains(adata, x_array, y_array, device, n_clusters: int):
+def _infer_n_clusters(adata):
+    """无 --n-clusters 时的域数推断：优先 h5ad 自带类别列，否则回退默认。
+
+    依次探测常见类别列；都没有则用 PARAMS 的默认值（configs/model_params/spaGCN.json
+    的 n_clusters，缺省 9），并打印提示让用户用 --n-clusters 覆盖。
+    """
+    for col in ("clusters", "cell_type", "leiden", "louvain", "celltype", "domain"):
+        if col in adata.obs.columns and adata.obs[col].notna().any():
+            n = int(adata.obs[col].nunique())
+            src.log_message(f"使用类别列 obs['{col}'] 的类别数 {n} 作为域数")
+            return n
+    default = int(PARAMS.get("n_clusters") or 9)
+    src.log_message(f"未发现类别标注列，目标域数回退默认 {default}（可用 --n-clusters 覆盖）")
+    return default
+
+
+def train_domains(adata, x_array, y_array, device, n_clusters: int, tech: str = ""):
+    import random
     import scanpy as sc
+    import torch
     from SpaGCN import SpaGCN
     from SpaGCN.calculate_adj import calculate_adj_matrix
     from SpaGCN.util import search_l, search_res
+
+    # 固定随机种子（louvain 初始化 + torch 训练均依赖全局 RNG），保证域划分可复现
+    r_seed = PARAMS.get("r_seed", 100)
+    t_seed = PARAMS.get("t_seed", 100)
+    n_seed = PARAMS.get("n_seed", 100)
+    random.seed(r_seed)
+    torch.manual_seed(t_seed)
+    np.random.seed(n_seed)
 
     src.log_step(3, 6, "计算邻接矩阵 (histology=False) + 搜索超参 l / res")
     adj = calculate_adj_matrix(x=x_array, y=y_array, histology=False)
@@ -151,12 +178,9 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
     l = search_l(p=p_val, adj=adj)
     src.log_message(f"l = {l}")
 
-    # 目标域数：优先 --n-clusters；其次 h5ad 自带 clusters 类别数；默认 9
+    # 目标域数：优先 --n-clusters；其次 h5ad 自带类别列；默认 9
     if n_clusters is None:
-        if "clusters" in adata.obs.columns:
-            n_clusters = adata.obs["clusters"].nunique()
-        else:
-            n_clusters = 9
+        n_clusters = _infer_n_clusters(adata)
     src.log_message(f"target_num(clusters) = {n_clusters}")
     res = search_res(adata, adj, l, target_num=n_clusters)
     src.log_message(f"res = {res}")
@@ -165,6 +189,10 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
     tol = PARAMS.get("tol", 5e-3)
     lr = PARAMS.get("lr", 0.05)
     max_epochs = PARAMS.get("max_epochs", 200)
+    # 训练前再次固定种子（search_res 内部会消耗 RNG 状态）
+    random.seed(r_seed)
+    torch.manual_seed(t_seed)
+    np.random.seed(n_seed)
     clf = SpaGCN()
     clf.set_l(l)
     clf.train(adata, adj, init_spa=True, init="louvain", res=res,
@@ -175,12 +203,14 @@ def train_domains(adata, x_array, y_array, device, n_clusters: int):
     from SpaGCN.calculate_adj import calculate_adj_matrix as calc_adj2d
     from SpaGCN.util import refine
 
+    # refine 邻域形状：Visium/DLPFC 为六边形 spot 网格 -> hexagon(6)；其余(ST/STARmap/MERFISH...) -> square(4)
+    shape = "hexagon" if tech in ("Visium", "Visium_HD", "DLPFC") else "square"
     adj_2d = calc_adj2d(x=x_array, y=y_array, histology=False)
     refined = refine(sample_id=adata.obs.index.tolist(), pred=adata.obs["pred"].tolist(),
-                     dis=adj_2d, shape="square")
+                     dis=adj_2d, shape=shape)
     adata.obs["refined_pred"] = np.asarray(refined).astype(str)
     domains = sorted(adata.obs["refined_pred"].unique())
-    src.log_message(f"空间域数量 = {len(domains)}")
+    src.log_message(f"refine shape = {shape} | 空间域数量 = {len(domains)}")
     return adata, domains
 
 
@@ -212,6 +242,7 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     all_svg = []
     gene_min_padj = {}   # 基因 -> 各域最小 pvals_adj（用于全基因排名口径）
     gene_min_pval = {}   # 基因 -> 各域最小 pvals（未校正，供统一 pval 列）
+    gene_effect = {}     # 基因 -> 取 min padj 那个域的 |log2(fold_change)|（无方向域间效应量）
 
     for dom in domains:
         try:
@@ -226,10 +257,14 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
             de_info = rank_genes_groups(input_adata=adata, target_cluster=dom,
                                         nbr_list=nbr, label_col="refined_pred",
                                         adj_nbr=True, log=True)
-            # 全基因排名：记录每个基因在各域的最小 padj（排序用）
-            for g, p in zip(de_info["genes"], de_info["pvals_adj"]):
+            fcs = de_info["fold_change"] if "fold_change" in de_info.columns else de_info["pvals_adj"]
+            # 全基因排名：记录每个基因在各域的最小 padj，并同步记录该域的无方向
+            # 域间效应量 |log2(fold_change)|（供评价侧 rank_vs_effect 单调性检验）
+            for g, p, fc in zip(de_info["genes"], de_info["pvals_adj"], fcs):
                 if g not in gene_min_padj or p < gene_min_padj[g]:
                     gene_min_padj[g] = p
+                    fc_safe = float(np.clip(fc, 1e-6, 1e6)) if np.isfinite(fc) else 1.0
+                    gene_effect[g] = abs(np.log2(fc_safe))
             # 未校正 p 值：与 padj 同一基因对齐记录最小 pval
             pvals = de_info["pvals"] if "pvals" in de_info.columns else de_info["pvals_adj"]
             for g, p in zip(de_info["genes"], pvals):
@@ -260,9 +295,10 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
              "padj": list(gene_min_padj.values())})
         rank_df["stat"] = -np.log10(rank_df["padj"].clip(lower=1e-300))
         rank_df["pval"] = rank_df["gene"].map(gene_min_pval)
+        rank_df["effect"] = rank_df["gene"].map(gene_effect)
         rank_df = rank_df.sort_values(["padj", "gene"]).reset_index(drop=True)
         rank_df["rank"] = rank_df.index + 1
-        rank_df = rank_df[["gene", "stat", "pval", "padj", "rank"]]
+        rank_df = rank_df[["gene", "stat", "pval", "padj", "effect", "rank"]]
         rank_path = outdir / f"SVG_spaGCN_{sample}_rank.csv"
         rank_df.to_csv(rank_path, index=False)
         src.log_message(f"已保存全基因排名: {rank_path} ({len(rank_df)} 个基因)")
@@ -306,7 +342,7 @@ def main():
     args = ap.parse_args()
 
     t_start = time.time()
-    h5ad_in, outdir, sample = _resolve_inputs(args)
+    h5ad_in, outdir, sample, tech = _resolve_inputs(args)
     abs_outdir = outdir.resolve() if isinstance(outdir, Path) else Path(outdir).resolve()
     src.log_header(f"SpaGCN: {sample}")
     device = _pick_device(args.device)
@@ -317,7 +353,7 @@ def main():
         sys.path.insert(0, str(spagcn_src))
 
     adata, x_array, y_array, device = load_and_prepare(h5ad_in, device)
-    adata, domains = train_domains(adata, x_array, y_array, device, args.n_clusters)
+    adata, domains = train_domains(adata, x_array, y_array, device, args.n_clusters, tech)
 
     # 坐标列作为绘图用 x_name/y_name
     x_name, y_name = "x", "y"

@@ -58,12 +58,14 @@ def read_rank_csv(path: Path) -> pd.DataFrame:
     - 按 (padj 升序, stat 降序) 重排后重新赋 1..n 的 rank，保证跨方法口径一致。
     """
     df = pd.read_csv(path, dtype={"gene": str})
-    for col in ("stat", "pval", "padj", "rank"):
+    for col in ("stat", "pval", "padj", "rank", "effect"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         else:
             df[col] = np.nan
-    df = df[["gene", "stat", "pval", "padj", "rank"]]
+    base_cols = ["gene", "stat", "pval", "padj", "rank"]
+    extra = [c for c in ("effect",) if c in df.columns]
+    df = df[base_cols + extra]
     df["gene"] = df["gene"].astype(str).str.strip()
     df = df.drop_duplicates(subset="gene")
     df = df.sort_values(
@@ -173,6 +175,16 @@ def method_metrics(method: str, rank_df: pd.DataFrame, runtime: float,
     else:
         rho = np.nan
 
+    # --- 域特异性单调性：-rank vs effect 的 Spearman（针对 SpaGCN 这类 Wilcoxon
+    #     域差异方法；effect 列只有该方法 rank CSV 会写出，其它方法恒为 NaN）---
+    if "effect" in rank_df.columns and rank_df["effect"].notna().any():
+        eff_common = rank_df[rank_df["effect"].notna()].copy()
+        eff_rho = (M.spearman_rho(-eff_common["rank"].to_numpy(np.float64),
+                                  eff_common["effect"].to_numpy(np.float64))
+                   if len(eff_common) >= 3 else np.nan)
+    else:
+        eff_rho = np.nan
+
     # --- 输出信息量（静态规则）---
     info_flags = {
         "has_pval": bool(rank_df["pval"].notna().any()),
@@ -192,6 +204,7 @@ def method_metrics(method: str, rank_df: pd.DataFrame, runtime: float,
         "null_p": null["p_value"],
         "wall_seconds": runtime,
         "rank_vs_moran_rho": rho,
+        "rank_vs_effect_rho": eff_rho,
         "info_flags": info_flags,
     }
 
@@ -517,6 +530,7 @@ def run_evaluation(args) -> int:
                 "median_geary_C_star": method_results[m]["median_geary_C_star"],
                 "wall_seconds": method_results[m]["wall_seconds"],
                 "rank_vs_moran_rho": method_results[m]["rank_vs_moran_rho"],
+                "rank_vs_effect_rho": method_results[m]["rank_vs_effect_rho"],
                 "info_flags": method_results[m]["info_flags"],
             } for m in methods
         },

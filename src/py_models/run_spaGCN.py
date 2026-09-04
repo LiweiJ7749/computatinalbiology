@@ -311,8 +311,8 @@ def main():
     src.log_header(f"SpaGCN: {sample}")
     device = _pick_device(args.device)
 
-    # 让 SpaGCN 源码可被 import（本地 GPU 补丁版）
-    spagcn_src = ROOT / "env_spatial" / "SpaGCN_src"
+    # 让 SpaGCN 源码可被 import（本地 GPU 补丁版；Windows/Linux 共用，SVG_EXT_DIR 可覆盖）
+    spagcn_src = src.external_src_dir("SpaGCN_src")
     if str(spagcn_src) not in sys.path:
         sys.path.insert(0, str(spagcn_src))
 

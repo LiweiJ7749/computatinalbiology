@@ -45,8 +45,19 @@ data_dir <- if (length(args) >= 1) args[1] else
   "F:/computatinalbiology/results/local_results/mouse_brain_STARmap/nnSVG"
 sample <- if (length(args) >= 2) args[2] else
   basename(dirname(normalizePath(data_dir, winslash = "/")))
-n_threads <- if (length(args) >= 3) as.integer(args[3]) else
-  if (!is.na(parallel::detectCores())) parallel::detectCores() else 4
+n_threads <- if (length(args) >= 3) as.integer(args[3]) else {
+  # 默认核数按"核数 ∩ 可用内存"取较小值，避免在小内存机器(如 WSL)上因
+  # 每个 fork worker 约 1~1.5GB 而 OOM 崩溃；HPC 上可显式传 n_threads 覆盖。
+  cores <- if (!is.na(parallel::detectCores())) parallel::detectCores() else 4
+  mem_avail_gb <- NA_real_
+  m <- tryCatch(readLines("/proc/meminfo", warn = FALSE), error = function(e) character())
+  ia <- grep("^MemAvailable:", m)
+  if (length(ia) == 1) {
+    mem_avail_gb <- as.numeric(gsub("[^0-9]", "", m[ia])) / 1048576
+  }
+  mem_cap <- if (is.na(mem_avail_gb)) cores else floor(mem_avail_gb / 1.5)
+  as.integer(max(1L, min(cores, mem_cap)))
+}
 out_dir <- data_dir
 
 log_header(sprintf("nnSVG: %s", sample))

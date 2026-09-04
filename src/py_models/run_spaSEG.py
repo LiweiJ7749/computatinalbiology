@@ -41,8 +41,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import src  # noqa: E402
 
-# 让 SpaSEG 官方源码可被 import（本地 GPU 版源码）
-SPASEG_SRC = ROOT / "env_spatial" / "SpaSEG_src"
+# 让 SpaSEG 源码可被 import（本地 GPU 版源码；Windows/Linux 共用，SVG_EXT_DIR 可覆盖）
+SPASEG_SRC = src.external_src_dir("SpaSEG_src")
 if str(SPASEG_SRC) not in sys.path:
     sys.path.insert(0, str(SPASEG_SRC))
 

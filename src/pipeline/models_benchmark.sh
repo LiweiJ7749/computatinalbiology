@@ -100,17 +100,26 @@ else
 fi
 export SVG_REPO_ROOT="$WIN_ROOT"
 
+# conda 环境探测（Linux/HPC：setup_linux_env.sh 创建的 `spatial` / `spatial_R`）
+CONDA_BASE="$(command -v conda >/dev/null 2>&1 && conda info --base 2>/dev/null || true)"
+
 PYTHON="${SVG_PYTHON:-}"
 if [ -z "$PYTHON" ]; then
-  for c in "$ROOT/env_spatial/python.exe" "$ROOT/env_spatial/bin/python"; do
+  for c in "$ROOT/env_spatial/bin/python" "$ROOT/env_spatial/bin/python3" \
+           "$ROOT/env_spatial_linux/bin/python" \
+           "$CONDA_BASE/envs/spatial/bin/python" \
+           "$CONDA_BASE/envs/spatial/bin/python3" \
+           "$ROOT/env_spatial/python.exe"; do
     if [ -n "$c" ] && [ -x "$c" ]; then PYTHON="$c"; break; fi
   done
   [ -z "$PYTHON" ] && PYTHON="$(command -v python3 || command -v python || true)"
 fi
 RSCRIPT="${SVG_RSCRIPT:-}"
 if [ -z "$RSCRIPT" ]; then
-  for c in "$ROOT/env_R/lib/R/bin/Rscript.exe" \
-           "$ROOT/env_R/bin/Rscript" \
+  for c in "$ROOT/env_R/bin/Rscript" \
+           "$ROOT/env_R_linux/bin/Rscript" \
+           "$CONDA_BASE/envs/spatial_R/bin/Rscript" \
+           "$ROOT/env_R/lib/R/bin/Rscript.exe" \
            "D:/R-4.4.3/bin/Rscript.exe"; do
     if [ -n "$c" ] && [ -x "$c" ]; then RSCRIPT="$c"; break; fi
   done
@@ -193,9 +202,11 @@ PY_EXTRA=()
 [ -n "$H5AD" ]    && PY_EXTRA+=(--h5ad "$H5AD")
 [ -n "$SPATIAL" ] && PY_EXTRA+=(--spatial "$SPATIAL")
 
-# 组装 R 运行库路径（按优先级：env_R -> D:/R-4.4.3，供 Rscript 加载 DLL）
+# 组装 R 运行库路径（Windows DLL / Linux 共享库兼容，供 Rscript 动态加载）
 r_env_path() {
   local p="$PATH"
+  [ -d "$ROOT/env_R/lib" ]              && p="$ROOT/env_R/lib:$p"
+  [ -d "$ROOT/env_R_linux/lib" ]        && p="$ROOT/env_R_linux/lib:$p"
   [ -d "$ROOT/env_R/Library/bin" ]      && p="$ROOT/env_R/Library/bin:$p"
   [ -d "$ROOT/env_R/bin" ]              && p="$ROOT/env_R/bin:$p"
   [ -d "$ROOT/env_R/lib/R/bin" ]        && p="$ROOT/env_R/lib/R/bin:$p"

@@ -30,6 +30,7 @@
 """
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -42,9 +43,18 @@ DATA_DIR = ROOT / "data"
 RESULTS_DIR = ROOT / "results" / "local_results"
 SRC_DIR = ROOT / "src"
 
-# 本机 conda 前缀里的解释器（Windows）；HPC/Linux 上不存在时由 find_* 兜底探测
-ENV_PYTHON = ROOT / "env_spatial" / "python.exe"
-ENV_RSCRIPT = ROOT / "env_R" / "lib" / "R" / "bin" / "Rscript.exe"
+# 解释器候选（Windows .exe 与 Linux/POSIX 均覆盖）：find_python/find_rscript 按序探测。
+PYTHON_CANDIDATES = (
+    ROOT / "env_spatial" / "bin" / "python",               # Linux conda env
+    ROOT / "env_spatial" / "bin" / "python3",
+    ROOT / "env_spatial_linux" / "bin" / "python",
+    ROOT / "env_spatial" / "python.exe",                   # Windows conda env
+)
+RSCRIPT_CANDIDATES = (
+    ROOT / "env_R" / "bin" / "Rscript",                    # Linux conda R
+    ROOT / "env_R_linux" / "bin" / "Rscript",
+    ROOT / "env_R" / "lib" / "R" / "bin" / "Rscript.exe",  # Windows conda R
+)
 
 # ---------------------------------------------------------------------------
 # 2) 方法注册（子目录 / 脚本 / 标准顺序）
@@ -347,9 +357,10 @@ def ensure_run_dirs(run: dict, methods=None) -> None:
 # 5) 环境探测（供 pipeline .sh 或交互式调用）
 # ---------------------------------------------------------------------------
 def find_python():
-    """返回可用的 python 解释器路径（优先本项目 env_spatial）。"""
-    if ENV_PYTHON.exists():
-        return str(ENV_PYTHON)
+    """返回可用的 python 解释器路径（优先本项目 env_spatial，其次 PATH）。"""
+    for c in PYTHON_CANDIDATES:
+        if c.exists():
+            return str(c)
     for name in ("python3", "python"):
         p = shutil.which(name)
         if p:
@@ -358,11 +369,28 @@ def find_python():
 
 
 def find_rscript():
-    """返回可用的 Rscript 路径（优先本项目 env_R）。"""
-    if ENV_RSCRIPT.exists():
-        return str(ENV_RSCRIPT)
-    p = shutil.which("Rscript")
-    return p
+    """返回可用的 Rscript 路径（优先本项目 env_R，其次 PATH）。"""
+    for c in RSCRIPT_CANDIDATES:
+        if c.exists():
+            return str(c)
+    return shutil.which("Rscript")
+
+
+def external_src_dir(name):
+    """返回外部方法源码目录（如 ``SpaGCN_src`` / ``SpaSEG_src``）。
+
+    这些源码为纯 Python、平台无关，Windows 与 Linux 共用同一份；默认优先
+    ``env_spatial``、其次 ``env_spatial_linux``，也可用环境变量 ``SVG_EXT_DIR``
+    覆盖（HPC/Linux 上无需把解释器路径写死进模型脚本）。
+    """
+    base = os.environ.get("SVG_EXT_DIR")
+    if base:
+        return Path(base) / name
+    for cand in (ROOT / "env_spatial", ROOT / "env_spatial_linux"):
+        p = cand / name
+        if p.exists():
+            return p
+    return ROOT / "env_spatial" / name
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ log_msg(sprintf("样本标签: %s", sample))
 counts <- readMM(file.path(data_dir, "counts.mtx"))
 genes  <- read.csv(file.path(data_dir, "genes.csv"),  header = FALSE, stringsAsFactors = FALSE)[, 1]
 barcodes <- read.csv(file.path(data_dir, "barcodes.csv"), header = FALSE, stringsAsFactors = FALSE)[, 1]
+barcodes <- as.character(barcodes)   # 纯数字 barcode（如 STARmap AD）需强制字符，避免被当作行号索引
 loc_df <- read.csv(file.path(data_dir, "location.csv"), stringsAsFactors = FALSE, row.names = 1)
 
 rownames(counts) <- genes

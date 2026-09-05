@@ -48,9 +48,57 @@
     "tech": "Visium_HD",
     "dim": 2
   },
+  "Visium_HD_Human_Breast_Cancer": {
+    "h5ad": "data/10xVisium/Human_Breast_Cancer/Visium_HD_Human_Breast_Cancer.h5ad",
+    "sample": "Visium_HD_Human_Breast_Cancer",
+    "tech": "Visium_HD",
+    "dim": 2
+  },
   "STARmap_AD_13m_ctrl_rep1": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-control-replicate_1_data.h5ad",
     "sample": "STARmap_AD_13m_ctrl_rep1",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_13m_ctrl_rep2": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-control-replicate_2_data.h5ad",
+    "sample": "STARmap_AD_13m_ctrl_rep2",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_13m_disease_rep1": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-disease-replicate_1_data.h5ad",
+    "sample": "STARmap_AD_13m_disease_rep1",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_13m_disease_rep2": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-disease-replicate_2_data.h5ad",
+    "sample": "STARmap_AD_13m_disease_rep2",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_8m_ctrl_rep1": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-control-replicate_1_data.h5ad",
+    "sample": "STARmap_AD_8m_ctrl_rep1",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_8m_ctrl_rep2": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-control-replicate_2_data.h5ad",
+    "sample": "STARmap_AD_8m_ctrl_rep2",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_8m_disease_rep1": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-disease-replicate_1_data.h5ad",
+    "sample": "STARmap_AD_8m_disease_rep1",
+    "tech": "STARmap",
+    "dim": 2
+  },
+  "STARmap_AD_8m_disease_rep2": {
+    "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-disease-replicate_2_data.h5ad",
+    "sample": "STARmap_AD_8m_disease_rep2",
     "tech": "STARmap",
     "dim": 2
   },

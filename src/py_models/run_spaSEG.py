@@ -66,6 +66,9 @@ _DEFAULTS = {
     "seed": 1029,
 }
 TOP_N = 6  # 绘制 Top N 个 SVG 的空间表达图
+# 超过该 spot 数时，detect_svg 内部 _data_prep/_ranks_svg 会把整矩阵 toarray()/to_df()
+# （50 万 x 1.9 万 ≈ 77GB float64，多份副本）导致 OOM，改用稀疏感知的轻量 SVG 检测。
+LARGE_N_SPOTS = 100_000
 
 
 def _get_param(key, default=None):
@@ -254,12 +257,50 @@ def merge_small_domains(adata, min_size=2):
     return adata
 
 
+def _detect_svgs_sparse(adata):
+    """大 spot 数据的轻量 SVG 检测（稀疏感知，替代 detect_svg 的密集计算）。
+
+    detect_svg 内部 ``_data_prep`` 的 ``adata_.X.toarray()`` 与 ``_ranks_svg`` 的
+    ``adata.to_df()`` 会把整矩阵 (n_spots x n_genes) 转 dense，50 万级 spot 必然 OOM。
+    这里只用 ``sc.tl.rank_genes_groups``（逐基因、稀疏切片）做域差异检验，再按
+    padj < 0.05 提取每域显著基因，避免触碰整矩阵 dense 化。
+    """
+    import scanpy as sc
+
+    src.log_message(f"大 spot 数据（{adata.n_obs} spots）：detect_svg 整矩阵 dense 化会 OOM，"
+                    "改用轻量 rank_genes_groups")
+    adata.obs["SpaSEG_clusters"] = adata.obs["SpaSEG_clusters"].astype(str).astype("category")
+    sc.tl.rank_genes_groups(
+        adata, groupby="SpaSEG_clusters", reference="rest",
+        n_genes=adata.shape[1], method="wilcoxon")
+
+    rgg = adata.uns["rank_genes_groups"]
+    domains = list(rgg["names"].dtype.names)
+    rows = []
+    for d in domains:
+        names = rgg["names"][d].astype(str)
+        padjs = np.asarray(rgg["pvals_adj"][d], dtype=float)
+        lfcs = np.asarray(rgg["logfoldchanges"][d], dtype=float)
+        for g, p, fc in zip(names, padjs, lfcs):
+            if np.isfinite(p):
+                rows.append({"gene": g, "domain": d,
+                             "pvals_adj": float(p), "log2_fc": float(fc)})
+    svg_df = pd.DataFrame(rows)
+    if len(svg_df):
+        svg_df = svg_df[svg_df["pvals_adj"] < 0.05].reset_index(drop=True)
+    src.log_message(f"轻量 SVG 检测完成，共 {len(svg_df)} 条")
+    return svg_df, adata
+
+
 def detect_svgs(adata):
+    # 处理仅含 1 个 spot 的域（wilcoxon 需要每组 >=2）
+    adata = merge_small_domains(adata, min_size=2)
+    if adata.n_obs > LARGE_N_SPOTS:
+        return _detect_svgs_sparse(adata)
+
     from downstream.svg import detect_svg  # noqa
 
     src.log_step(4, 6, "逐空间域检测 SVG（detect_svg, 官方默认过滤）")
-    # 处理仅含 1 个 spot 的域（wilcoxon 需要每组 >=2）
-    adata = merge_small_domains(adata, min_size=2)
     # STARmap var 无 'mt' 列（只有 'mito'），故 filter_mt=False；
     # use_log=False 时 _data_prep 会把 log1p 表达 expm1 回伪 counts 再做 Wilcoxon（官方默认）。
     svg_df, _adata = detect_svg(
@@ -348,17 +389,16 @@ def plot_top_svgs(adata, svg_df, outdir, sample):
     src.log_message(f"Top SVG 基因: {genes}")
     xy = adata.obsm["spatial"]
 
-    # 用 X 的 log1p 表达（含 0）着色
-    if hasattr(adata.X, "toarray"):
-        expr_mat = adata.X.toarray()
-    else:
-        expr_mat = np.asarray(adata.X)
-
     for g in genes:
         if g not in adata.var_names:
             continue
         idx = list(adata.var_names).index(g)
-        expr = expr_mat[:, idx]
+        # 逐基因取稀疏列，避免大 spot 数据整矩阵 toarray()（50 万 x 1.9 万 ≈ 77GB）OOM
+        col = adata.X[:, idx]
+        if hasattr(col, "toarray"):
+            expr = np.asarray(col.toarray()).ravel()
+        else:
+            expr = np.asarray(col).ravel()
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
         scm = ax.scatter(xy[:, 0], xy[:, 1], c=expr, cmap="viridis", s=12, linewidths=0)
         ax.set_aspect("equal")

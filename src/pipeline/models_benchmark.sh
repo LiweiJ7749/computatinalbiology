@@ -214,7 +214,9 @@ except Exception:
     print('')
 " 2>/dev/null)"
   export SPARK_OPTION="$opt"
-  [ -n "$opt" ] && log_msg "SPARK-X 参数: option=${opt}"
+  if [ -n "$opt" ]; then
+    log_msg "SPARK-X 参数: option=${opt}"
+  fi
 }
 
 # ---------------- 1) 共同前处理 ----------------

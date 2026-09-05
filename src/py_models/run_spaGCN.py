@@ -347,6 +347,11 @@ def main():
     src.log_header(f"SpaGCN: {sample}")
     device = _pick_device(args.device)
 
+    # 数据集级运行参数（configs/run_params.json）：CLI 未指定 --n-clusters 时用它覆盖
+    run_params = src.load_run_params(args.dataset or "")
+    if args.n_clusters is None:
+        args.n_clusters = run_params.get("spagcn", {}).get("n_clusters")
+
     # 让 SpaGCN 源码可被 import（本地 GPU 补丁版；Windows/Linux 共用，SVG_EXT_DIR 可覆盖）
     spagcn_src = src.external_src_dir("SpaGCN_src")
     if str(spagcn_src) not in sys.path:

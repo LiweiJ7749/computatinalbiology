@@ -1,0 +1,58 @@
+{
+  "_comment": "每个数据集的差异化运行参数（基因过滤/域数等）。未列出的方法参数使用代码内默认值。nnSVG 的 pcspots 单位是百分比（0.5 = 0.5%）。",
+
+  "mouse_brain_STARmap": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "Visium_Mouse_Olfactory_Bulb": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "DLPFC_151507": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "DLPFC_151508": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "DLPFC_151509": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "DLPFC_151510": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "Visium_HD_Mouse_Kidney": {
+    "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
+    "spagcn": { "n_clusters": null, "_skip": "邻接矩阵 O(n^2)，50 万 spot 不适用" }
+  },
+
+  "MERFISH_Moffitt": {
+    "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
+    "spagcn": { "n_clusters": null, "_skip": "邻接矩阵 O(n^2)，103 万 spot 不适用" }
+  },
+
+  "STARmap_AD_13m_ctrl_rep1": {
+    "nnsvg": { "pcspots": 0.5, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "Stereo_seq_drosophila": {
+    "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  },
+
+  "Slide_seq_OB2_3D": {
+    "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
+    "spagcn": { "n_clusters": null }
+  }
+}

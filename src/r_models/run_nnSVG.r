@@ -92,9 +92,25 @@ spe <- SpatialExperiment(
 rownames(spe) <- genes
 
 # ---------- 过滤基因 ----------
-spe <- filter_genes(spe, filter_genes_ncounts = 3,
-                    filter_genes_pcspots = 0.5, filter_mito = TRUE)
+# filter_genes_pcspots / ncounts 可配置（默认 0.01% / 3）：Visium HD 等稀疏平台
+# bin 极小，0.5% 会滤掉 99% 基因；由 models_benchmark.sh 从 configs/run_params.json
+# 读取并注入环境变量 NNSVG_PCSPOTS / NNSVG_NCOUNTS。
+pcspots <- as.numeric(Sys.getenv("NNSVG_PCSPOTS", "0.01"))
+ncounts <- as.numeric(Sys.getenv("NNSVG_NCOUNTS", "3"))
+log_msg(sprintf("filter_genes_pcspots = %s%% | ncounts = %s", pcspots, ncounts))
+spe <- filter_genes(spe, filter_genes_ncounts = ncounts,
+                    filter_genes_pcspots = pcspots, filter_mito = TRUE)
 log_msg(sprintf("过滤后基因数: %d", nrow(spe)))
+
+# 剔除 library size = 0 的 spot：稀疏平台（如 Visium HD 的微小 bin）过滤后部分
+# spot 在保留基因上总 counts 为 0，会使 logNormCounts 报
+# "size factors should be positive"，故先剔除这些 spot。
+libsize <- Matrix::colSums(counts(spe))
+zero_spots <- sum(libsize == 0)
+if (zero_spots > 0) {
+  log_msg(sprintf("剔除 library size = 0 的 spot: %d 个", zero_spots))
+  spe <- spe[, libsize > 0]
+}
 
 # ---------- 计算 logcounts ----------
 spe <- computeLibraryFactors(spe)

@@ -7,7 +7,8 @@
 #SBATCH -o star_cpu.%j.out
 #SBATCH -e star_cpu.%j.err
 
-# mouse_brain_STARmap：前处理 + SPARK-X + nnSVG（CPU）
+# mouse_brain_STARmap（930 spot × 996 基因，~MB）：前处理 + SPARK-X + nnSVG（CPU）
+# 资源预估：SPARK-X<1s、nnSVG 分钟级 → 6240-36C-192G（36核/192G 免费）足够。
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

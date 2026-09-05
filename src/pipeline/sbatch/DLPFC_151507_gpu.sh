@@ -9,7 +9,8 @@
 #SBATCH -o dlpfc507_gpu.%j.out
 #SBATCH -e dlpfc507_gpu.%j.err
 
-# DLPFC_151507：SpaGCN + SpaSEG（GPU，复用 cpu 作业已生成的前处理）
+# DLPFC_151507（4226 spot）：SpaGCN + SpaSEG（GPU，复用 cpu 作业的前处理）
+# 资源预估：数千 spot，SpaGCN 邻接 4226² 可接受 → gpu_v100（V100 32G）。
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

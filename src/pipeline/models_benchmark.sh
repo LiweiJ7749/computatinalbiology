@@ -183,6 +183,24 @@ run_R() {
     "$RSCRIPT" "$@" )
 }
 
+# 读取数据集级 nnSVG 过滤参数（configs/run_params.json）并 export 为环境变量，
+# 供 run_nnSVG.r 通过 NNSVG_PCSPOTS / NNSVG_NCOUNTS 读取。
+export_nnsvg_params() {
+  local line
+  line="$("$PYTHON" -c "
+import json
+try:
+    p = json.load(open('$ROOT/configs/run_params.json'))
+    n = p.get('$DATASET', {}).get('nnsvg', {})
+    print(n.get('pcspots', 0.01), n.get('ncounts', 3))
+except Exception:
+    print(0.01, 3)
+" 2>/dev/null)"
+  export NNSVG_PCSPOTS="$(echo "$line" | awk '{print $1}')"
+  export NNSVG_NCOUNTS="$(echo "$line" | awk '{print $2}')"
+  log_msg "nnSVG 过滤参数: pcspots=${NNSVG_PCSPOTS}% ncounts=${NNSVG_NCOUNTS}"
+}
+
 # ---------------- 1) 共同前处理 ----------------
 if [ "$SKIP_PRE" -eq 0 ]; then
   log_header "步骤 1/2: 共同前处理 (h5ad_preprocess.py)"
@@ -253,4 +271,5 @@ fi
 
 log_header "models_benchmark 全部完成"
 echo "结果目录: $OUTDIR"
+echo "日志目录: $OUTDIR/logs"
 echo "日志目录: $OUTDIR/logs"

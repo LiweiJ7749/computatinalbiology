@@ -9,7 +9,8 @@
 #SBATCH -o olf_gpu.%j.out
 #SBATCH -e olf_gpu.%j.err
 
-# Visium_Mouse_Olfactory_Bulb：SpaGCN + SpaSEG（GPU，复用 cpu 作业已生成的前处理）
+# Visium_Mouse_Olfactory_Bulb（1185 spot）：SpaGCN + SpaSEG（GPU，复用 cpu 作业的前处理）
+# 资源预估：千级 spot，SpaGCN/SpaSEG 分钟级 → gpu_v100（V100 32G）足够。
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

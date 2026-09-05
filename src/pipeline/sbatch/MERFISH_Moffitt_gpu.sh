@@ -1,17 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=hd_kidney_gpu
+#SBATCH --job-name=merfish_gpu
 #SBATCH --partition=gpuB
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
-#SBATCH -o hd_kidney_gpu.%j.out
-#SBATCH -e hd_kidney_gpu.%j.err
+#SBATCH -o merfish_gpu.%j.out
+#SBATCH -e merfish_gpu.%j.err
 
-# Visium_HD_Mouse_Kidney：SpaSEG（gpuB 80G 显存，复用 cpu 作业的前处理）
-# 说明：SpaGCN 对 50 万 spot 不适用——其 calculate_adj_matrix 用 dense 距离矩阵
-#      O(n^2)≈1TB，必然 OOM/Segfault，故本数据集跳过 SpaGCN，只跑 SpaSEG。
+# MERFISH_Moffitt：SpaSEG（gpuB 80G；SpaGCN 因 dense 邻接 O(n^2) 对 103万 spot 不适用，已跳过）
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH
@@ -19,7 +17,7 @@ export SVG_PYTHON=$HOME/svg_methods/envs/spatial/bin/python
 export SVG_RSCRIPT=$HOME/svg_methods/envs/spatial_R/bin/Rscript
 
 bash src/pipeline/models_benchmark.sh \
-  --dataset Visium_HD_Mouse_Kidney \
+  --dataset MERFISH_Moffitt \
   --methods spaseg \
   --skip-preprocess --skip-eval \
   --device cuda

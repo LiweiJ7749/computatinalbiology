@@ -7,7 +7,8 @@
 #SBATCH -o dlpfc510_cpu.%j.out
 #SBATCH -e dlpfc510_cpu.%j.err
 
-# DLPFC_151510：前处理 + SPARK-X + nnSVG（CPU，33538 基因逐基因）
+# DLPFC_151510（4226 spot × 33538 基因，104MB）：前处理 + SPARK-X + nnSVG
+# 资源预估：nnSVG 33538 基因逐基因，64 核约 1~数小时 → 7542-64C-512G（免费）。
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

@@ -221,6 +221,25 @@ def load_model_params(method: str) -> dict:
     return {}
 
 
+RUN_PARAMS_PATH = CONFIG_DIR / "run_params.json"
+
+
+def load_run_params(dataset: str) -> dict:
+    """从 configs/run_params.json 读取指定数据集的差异化运行参数。
+
+    返回该数据集的参数字典（如 ``{"nnsvg": {"pcspots": ...}, "spagcn": {...}}``）；
+    数据集未注册或文件缺失时返回空字典。字段含 nnsvg.pcspots/ncounts、
+    spagcn.n_clusters 等，供各方法脚本按数据集覆盖默认值。
+    """
+    import json
+
+    if not RUN_PARAMS_PATH.exists():
+        return {}
+    with open(RUN_PARAMS_PATH, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    return raw.get(dataset) or {}
+
+
 # ---------------------------------------------------------------------------
 # 3a) 日志工具（结构化、带时间戳、可读性好）
 # ---------------------------------------------------------------------------

@@ -618,6 +618,70 @@ def export_r_format(h5ad, tp, outdir: Path, tech=None, dim=2) -> None:
     _write_r_format(X, gene_names, barcodes, loc, outdir)
 
 
+def _aggregate_spots_to_bins(adata, tp, bin_factor, tech=None):
+    """把对齐后的 spot 按 Visium HD bin 网格聚合为 meta-spot。
+
+    以 obs['array_row'] / obs['array_col'] 为 8µm bin 索引，按 bin_factor x bin_factor
+    合并：counts 求和、坐标取均值。返回 (X_bin: meta x genes 稀疏矩阵,
+    binned_barcodes, coords_df)。
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy import sparse
+
+    barcodes = [b for b in adata.obs.index if b in tp.index]
+    if not barcodes:
+        raise ValueError("binning 时没有与坐标对齐的 spot")
+
+    obs_sub = adata.obs.loc[barcodes]
+    tp_aligned = tp.loc[barcodes]
+
+    if "array_row" in obs_sub.columns and "array_col" in obs_sub.columns:
+        arr_r = obs_sub["array_row"].astype(int).to_numpy()
+        arr_c = obs_sub["array_col"].astype(int).to_numpy()
+    else:
+        # 无 array 索引时按 8µm 网格从坐标推导（bin_factor 仍以 8µm 为基准）；
+        # 用 floor 保证负坐标（如 MERFISH 的 Centroid 可为负）分桶边界一致。
+        arr_r = np.floor(tp_aligned["x"].to_numpy(dtype=float) / 8.0).astype(int)
+        arr_c = np.floor(tp_aligned["y"].to_numpy(dtype=float) / 8.0).astype(int)
+
+    bin_r = arr_r // bin_factor
+    bin_c = arr_c // bin_factor
+    keys = [f"{int(r)}:{int(c)}" for r, c in zip(bin_r.tolist(), bin_c.tolist())]
+    codes, uniques = pd.factorize(pd.Index(keys))
+    n_bin = len(uniques)
+
+    X = _raw_counts_matrix(adata, tech=tech)          # spots x genes（按 obs.index 顺序）
+    keep_idx = [i for i, b in enumerate(adata.obs.index) if b in tp.index]
+    X = X[keep_idx, :]                                # 对齐 tp 的 spots x genes
+
+    G = sparse.csr_matrix(
+        (np.ones(len(codes)), (codes, np.arange(len(codes)))),
+        shape=(n_bin, len(codes)),
+    )
+    X_bin = G @ X                                     # meta x genes
+
+    x = tp_aligned["x"].to_numpy(dtype=float)
+    y = tp_aligned["y"].to_numpy(dtype=float)
+    cnt = np.bincount(codes, minlength=n_bin)
+    x_bin = np.bincount(codes, weights=x, minlength=n_bin) / cnt
+    y_bin = np.bincount(codes, weights=y, minlength=n_bin) / cnt
+
+    binned_barcodes = [f"bin_{u}" for u in uniques]
+    coords_df = pd.DataFrame({"x": x_bin, "y": y_bin}, index=binned_barcodes)
+    return X_bin, binned_barcodes, coords_df
+
+
+def export_r_format_binned(adata, tp, outdir: Path, bin_factor, tech=None) -> None:
+    """导出 binning 后的 SPARK-X / nnSVG 输入（genes x meta-spots）。"""
+    X_bin, barcodes, coords_df = _aggregate_spots_to_bins(
+        adata, tp, bin_factor, tech=tech)
+    gene_names = list(adata.var.index.astype(str))
+    _write_r_format(X_bin.T.tocsr(), gene_names, barcodes, coords_df, outdir)
+    log_message(f"binning 导出: bin_factor={bin_factor} -> {len(barcodes)} meta-spots "
+                f"(原 {len(tp)} spots)")
+
+
 def prepare_spagcn(h5ad, tp, img, outdir: Path, sample_name: str) -> None:
     """为 SpaGCN 准备输入：写 <sample>_spaGCN.h5ad + 坐标列 + 组织学图像。
 
@@ -660,6 +724,33 @@ def prepare_spagcn(h5ad, tp, img, outdir: Path, sample_name: str) -> None:
     else:
         log_message(f"SpaGCN 准备: 坐标列（无组织学图像，可用 histology=False）-> {h5ad_out}")
     del adata
+
+
+def prepare_spagcn_binned(adata, tp, outdir: Path, sample_name: str,
+                          bin_factor, tech=None) -> None:
+    """为 SpaGCN 准备 binning 后的输入：写 <sample>_spaGCN.h5ad（X=聚合 counts + obs x/y）。"""
+    import numpy as np
+    import pandas as pd
+    import anndata as ad
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    X_bin, barcodes, coords_df = _aggregate_spots_to_bins(
+        adata, tp, bin_factor, tech=tech)
+
+    obs = pd.DataFrame(index=barcodes)
+    obs["x"] = coords_df["x"].astype(float).values
+    obs["y"] = coords_df["y"].astype(float).values
+    obs["x_pixel"] = obs["x"].values
+    obs["y_pixel"] = obs["y"].values
+
+    adata_bin = ad.AnnData(X=X_bin.tocsr(), obs=obs, var=adata.var.copy())
+    adata_bin.obsm["spatial"] = coords_df[["x", "y"]].to_numpy(dtype=np.float32)
+
+    h5ad_out = outdir / f"{sample_name}_spaGCN.h5ad"
+    adata_bin.write(h5ad_out)
+    log_message(f"SpaGCN 准备(binning): bin_factor={bin_factor} -> "
+                f"{len(barcodes)} meta-spots -> {h5ad_out}")
+    del adata_bin
 
 
 def prepare_spaseg(h5ad, tp, outdir: Path, sample_name: str) -> None:
@@ -795,7 +886,7 @@ def _preprocess_run_3d(run, methods):
     return run
 
 
-def preprocess_run(run: dict, methods=None) -> dict:
+def preprocess_run(run: dict, methods=None, bin_factor: int = 1) -> dict:
     """对一次 run 生成方法所需的全部输入，并建立目录。
 
     - 2D：R 方法（spark/nnsvg）写 counts.mtx / genes.csv / barcodes.csv / location.csv；
@@ -828,6 +919,8 @@ def preprocess_run(run: dict, methods=None) -> dict:
 
     tp = load_coords(adata, run.get("spatial"), tech=tech, h5ad_path=h5ad_path)
     log_message(f"对齐坐标后 spots = {len(tp)}")
+    if bin_factor > 1:
+        log_message(f"空间 binning: bin_factor={bin_factor}（nnsvg/spagcn 聚合为 meta-spot）")
 
     img = None
     if "spagcn" in methods:
@@ -839,10 +932,18 @@ def preprocess_run(run: dict, methods=None) -> dict:
 
     for m in methods:
         outdir = run["method_dirs"][m]
-        if m in ("spark", "nnsvg"):
+        if m == "spark":
             export_r_format(adata, tp, outdir, tech=tech)
+        elif m == "nnsvg":
+            if bin_factor > 1:
+                export_r_format_binned(adata, tp, outdir, bin_factor, tech=tech)
+            else:
+                export_r_format(adata, tp, outdir, tech=tech)
         elif m == "spagcn":
-            prepare_spagcn(adata, tp, img, outdir, run["sample"])
+            if bin_factor > 1:
+                prepare_spagcn_binned(adata, tp, outdir, run["sample"], bin_factor, tech=tech)
+            else:
+                prepare_spagcn(adata, tp, img, outdir, run["sample"])
         elif m == "spaseg":
             prepare_spaseg(adata, tp, outdir, run["sample"])
     del adata

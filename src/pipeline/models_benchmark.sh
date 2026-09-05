@@ -201,6 +201,22 @@ except Exception:
   log_msg "nnSVG 过滤参数: pcspots=${NNSVG_PCSPOTS}% ncounts=${NNSVG_NCOUNTS}"
 }
 
+# 读取数据集级 SPARK-X 参数（configs/run_params.json 的 spark.option），
+# 供 run_spark.r 通过 SPARK_OPTION 读取（超大数据集强制投影核 single 避免 O(n^2)）。
+export_spark_params() {
+  local opt
+  opt="$("$PYTHON" -c "
+import json
+try:
+    p = json.load(open('$ROOT/configs/run_params.json'))
+    print(p.get('$DATASET', {}).get('spark', {}).get('option', ''))
+except Exception:
+    print('')
+" 2>/dev/null)"
+  export SPARK_OPTION="$opt"
+  [ -n "$opt" ] && log_msg "SPARK-X 参数: option=${opt}"
+}
+
 # ---------------- 1) 共同前处理 ----------------
 if [ "$SKIP_PRE" -eq 0 ]; then
   log_header "步骤 1/2: 共同前处理 (h5ad_preprocess.py)"
@@ -215,6 +231,8 @@ fi
 
 # ---------------- 2) 逐方法运行 ----------------
 log_header "步骤 2/2: 运行各方法"
+export_nnsvg_params
+export_spark_params
 for m in $METHODS; do
   case "$m" in
     spark)

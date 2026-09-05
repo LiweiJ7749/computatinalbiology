@@ -70,7 +70,10 @@ if (length(mt_idx) != 0) {
 # mixture 的高斯/余弦核按 2D 连续坐标设计，对离散 z 轴（整数切片号）会退化
 # （余弦核 cos(2*pi*z/l) 别名 -> 常数列 -> crossprod 奇异），投影核 n x d 任意维均成立。
 loc_dim <- ncol(loc)
-option <- if (loc_dim > 2) "single" else "mixture"
+# 大数据集可通过 SPARK_OPTION（run_params.json 的 spark.option）强制投影核 single，
+# 避免 mixture 的高斯/余弦核在大 spot 数下的 O(n^2) 内存；缺省仍按维度自动选择。
+opt_env <- Sys.getenv("SPARK_OPTION", "")
+option <- if (nzchar(opt_env)) opt_env else if (loc_dim > 2) "single" else "mixture"
 log_step(1, 2, sprintf("运行 sparkx (option=%s, loc=%dx%d)", option, nrow(loc), loc_dim))
 t0 <- Sys.time()
 res <- sparkx(counts, loc, numCores = 1, option = option, verbose = FALSE)

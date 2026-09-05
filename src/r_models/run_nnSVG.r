@@ -83,19 +83,8 @@ rownames(loc) <- barcodes
 
 cat(sprintf("counts 维度: %d genes x %d spots\n", nrow(counts), ncol(counts)))
 
-# ---------- 大数据保护：nnSVG 的 BRISC 逐基因需构建 n x n 空间协方差矩阵 ----------
-# （O(n^2) 内存）。50 万级 spot 时单基因即 ~2TB，64 个 fork worker 会进一步放大内存
-# （日志中 "1 parallel job did not deliver a result" 即 worker 被 OOM 杀掉）。
-# 超过阈值直接跳过，不生成 rank CSV（evaluation 因缺文件会自然跳过该方法）。
-MAX_SPOTS <- 100000
-if (ncol(counts) > MAX_SPOTS) {
-  log_msg(sprintf("spot 数 %d 超过阈值 %d：nnSVG BRISC O(n^2) 内存不可行，跳过 nnSVG",
-                  ncol(counts), MAX_SPOTS))
-  writeLines(sprintf('{"method":"nnsvg","sample":"%s","wall_seconds":0.0,"skipped":true}',
-                     sample), file.path(out_dir, "runtime.json"))
-  log_msg("nnSVG 已跳过（未生成 rank CSV，evaluation 将自动跳过该方法）")
-  quit(save = "no", status = 0)
-}
+# 说明：大数据集的 spot 数已在共同前处理阶段通过空间 binning 聚合到可行规模
+# （src.preprocess 的 --bin-factor，见 configs/run_params.json），因此这里不再跳过。
 
 # ---------- 构建 SpatialExperiment 对象 ----------
 spe <- SpatialExperiment(

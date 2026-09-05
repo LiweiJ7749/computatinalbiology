@@ -120,33 +120,44 @@ def moran_geary_table(expr_mat: np.ndarray, gene_names: Sequence[str],
                         columns=["moran_I", "geary_C", "geary_C_star"])
 
 
-def null_moran_compare(sig_morans: np.ndarray, expr_mat: np.ndarray,
-                       W, n_null: int = 200, seed: int = 0) -> dict:
+def null_moran_compare(sig_morans: np.ndarray, all_morans: np.ndarray,
+                       n_null: int = 200, seed: int = 0, max_k: int = 500) -> dict:
     """1.8 检出集合 Moran's I 的随机对照置换检验。
 
     sig_morans: 方法检出基因的 Moran's I 数组。
-    expr_mat: 全基因表达矩阵 (genes x spots)，从中随机抽同数基因作为 null。
-    返回 {median_sig, median_null, mean_null, p_value(单侧, sig>null), n_null}。
+    all_morans: 全基因已算好的 Moran's I 数组（来自 ``moran_geary_table``）。
+    max_k: 检出基因数超过该值时随机抽样子集做 null 对比，避免置换次数 x 基因数
+           过大导致超大 spot 数据集上数小时~数十小时的白费核时。
+    返回 {median_sig, median_null, mean_null, p_value(单侧, sig>null), n_null, n_sig}。
     """
     rng = np.random.default_rng(seed)
-    n_genes, _ = expr_mat.shape
+    sig_morans = np.asarray(sig_morans, dtype=np.float64)
+    sig_morans = sig_morans[np.isfinite(sig_morans)]
+    all_morans = np.asarray(all_morans, dtype=np.float64)
+    all_morans = all_morans[np.isfinite(all_morans)]
+
     k = len(sig_morans)
     if k == 0:
         return {"median_sig": np.nan, "median_null": np.nan, "mean_null": np.nan,
                 "p_value": np.nan, "n_null": n_null, "n_sig": 0}
+    if k > max_k:
+        sig_morans = sig_morans[rng.choice(k, size=max_k, replace=False)]
+        k = max_k
+
+    n_all = len(all_morans)
+    if n_all < k:
+        k = n_all
     null_medians = np.empty(n_null)
     for r in range(n_null):
-        idx = rng.choice(n_genes, size=k, replace=False)
-        vals = [morans_i(expr_mat[g], W) for g in idx]
-        vals = np.asarray([v for v in vals if np.isfinite(v)])
-        null_medians[r] = np.median(vals) if len(vals) else np.nan
+        idx = rng.choice(n_all, size=k, replace=False)
+        null_medians[r] = np.median(all_morans[idx])
     null_medians = null_medians[np.isfinite(null_medians)]
     med_sig = float(np.nanmedian(sig_morans))
     p = (1.0 + float(np.sum(null_medians >= med_sig))) / (1.0 + len(null_medians)) \
         if len(null_medians) else np.nan
     return {"median_sig": med_sig, "median_null": float(np.nanmedian(null_medians)),
             "mean_null": float(np.nanmean(null_medians)), "p_value": p,
-            "n_null": int(len(null_medians)), "n_sig": k}
+            "n_null": int(len(null_medians)), "n_sig": int(len(sig_morans))}
 
 
 # ---------------------------------------------------------------------------

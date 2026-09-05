@@ -60,6 +60,8 @@ def main() -> None:
     ap.add_argument("--methods", nargs="+", choices=list(src.METHOD_SUBDIRS),
                     default=list(src.ALL_METHODS),
                     help="要生成的数据")
+    ap.add_argument("--bin-factor", type=int, default=None,
+                    help="对 nnSVG/SpaGCN 做空间 binning 的合并倍数（默认自动取 run_params 的 bin_factor，无则 1=不合并）")
     args = ap.parse_args()
 
     # 完全未指定数据时，用默认演示数据集（Visium）
@@ -77,7 +79,11 @@ def main() -> None:
     src.log_message(f"sample  = {run['sample']}")
     src.log_message(f"tech    = {run['tech'] or 'auto'}")
     src.log_message(f"methods = {run['methods']}")
-    src.preprocess_run(run, methods=run["methods"])
+    bin_factor = args.bin_factor
+    if bin_factor is None:
+        bin_factor = src.load_run_params(args.dataset or "").get("bin_factor", 1)
+    src.log_message(f"bin_factor = {bin_factor}")
+    src.preprocess_run(run, methods=run["methods"], bin_factor=bin_factor)
 
 
 if __name__ == "__main__":

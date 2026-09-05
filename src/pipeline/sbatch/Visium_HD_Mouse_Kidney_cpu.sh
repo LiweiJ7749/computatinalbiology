@@ -7,8 +7,9 @@
 #SBATCH -o hd_kidney_cpu.%j.out
 #SBATCH -e hd_kidney_cpu.%j.err
 
-# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因）：SPARK-X + nnSVG（前处理已由 preprocess 脚本单独完成）
-# 注意：nnSVG 逐基因 BRISC 在此规模极慢（可能数小时~数十小时），日志里会分别打印各步耗时。
+# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因）：SPARK-X + nnSVG + SpaGCN
+# （前处理已由 preprocess 脚本单独完成，nnSVG/SpaGCN 的输入已按 bin_factor 聚合）。
+# 注意：nnSVG 逐基因 BRISC 在此规模仍较慢，日志里会分别打印各步耗时。
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH
@@ -17,6 +18,6 @@ export SVG_RSCRIPT=$HOME/svg_methods/envs/spatial_R/bin/Rscript
 
 bash src/pipeline/models_benchmark.sh \
   --dataset Visium_HD_Mouse_Kidney \
-  --methods spark,nnsvg \
-  --cores 64 \
+  --methods spark,nnsvg,spagcn \
+  --cores 8 \
   --skip-preprocess --skip-eval

@@ -33,12 +33,19 @@
 
   "Visium_HD_Mouse_Kidney": {
     "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
-    "spagcn": { "n_clusters": null, "_skip": "邻接矩阵 O(n^2)，50 万 spot 不适用" }
+    "spagcn": { "n_clusters": null },
+    "bin_factor": 5
+  },
+
+  "Visium_HD_Human_Breast_Cancer": {
+    "spark": { "option": "single" }
   },
 
   "MERFISH_Moffitt": {
     "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
-    "spagcn": { "n_clusters": null, "_skip": "邻接矩阵 O(n^2)，103 万 spot 不适用" }
+    "spagcn": { "n_clusters": null },
+    "spark": { "option": "single" },
+    "bin_factor": 8
   },
 
   "STARmap_AD_13m_ctrl_rep1": {

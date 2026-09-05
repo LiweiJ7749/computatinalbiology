@@ -16,4 +16,4 @@ export SVG_PYTHON=$HOME/svg_methods/envs/spatial/bin/python
 
 $SVG_PYTHON src/preprocess/h5ad_preprocess.py \
   --dataset MERFISH_Moffitt \
-  --methods spark nnsvg spaseg
+  --methods spark nnsvg spagcn spaseg

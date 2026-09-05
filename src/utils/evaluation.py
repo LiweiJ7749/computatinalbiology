@@ -164,8 +164,9 @@ def method_metrics(method: str, rank_df: pd.DataFrame, runtime: float,
     median_geary_c_star = (float(np.nanmedian(moran_table.loc[sig_genes, "geary_C_star"]))
                            if sig_genes else np.nan)
 
-    null = M.null_moran_compare(sig_morans, expr_mat, W,
-                                n_null=n_null, seed=seed)
+    null = M.null_moran_compare(
+        sig_morans, moran_table["moran_I"].to_numpy(np.float64),
+        n_null=n_null, seed=seed)
 
     # --- 效应量单调性：-rank vs Moran's I 的 Spearman（正 = 排名越靠前 Moran 越高）---
     common = rank_df[rank_df["gene"].isin(moran_table.index)].copy()

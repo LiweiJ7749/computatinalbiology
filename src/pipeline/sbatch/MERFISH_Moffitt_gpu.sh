@@ -9,7 +9,7 @@
 #SBATCH -o merfish_gpu.%j.out
 #SBATCH -e merfish_gpu.%j.err
 
-# MERFISH_Moffitt：SpaSEG（gpuB 80G；SpaGCN 因 dense 邻接 O(n^2) 对 103万 spot 不适用，已跳过）
+# MERFISH_Moffitt：SpaSEG（gpuB 80G；SpaGCN 已在 cpu 作业中按 bin_factor=8 聚合后运行）
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

@@ -89,6 +89,49 @@ SVG_RSCRIPT=$PWD/envs/spatial_R/bin/Rscript \
 bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 ```
 
+## 本地 vs HPC 运行
+
+### 本地运行（小规模数据集）
+
+本地构建好 `envs/` 后，直接调用主控脚本即可（自动跑完前处理 → 四方法 → 评估）：
+
+```bash
+# 单个数据集全流程（默认四方法）
+bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
+
+# STARmap AD 8 复本（逐个运行）
+bash src/pipeline/models_benchmark.sh --dataset STARmap_AD_13m_ctrl_rep1
+bash src/pipeline/models_benchmark.sh --dataset STARmap_AD_13m_disease_rep2
+
+# 指定方法子集 / nnSVG 核数
+bash src/pipeline/models_benchmark.sh \
+  --dataset Visium_Mouse_Olfactory_Bulb --methods spark,nnsvg --cores 8
+```
+
+本地可全流程运行的数据集见「数据集」节的「本地运行」。
+
+### HPC 运行（大规模数据集）
+
+HPC 需先装 Miniforge3、上传代码/数据，并在计算节点重建环境，然后按数据集提交
+SBATCH 脚本（位于 `src/pipeline/sbatch/`）：
+
+```bash
+# 1) 环境构建（首次，CPU 节点，conda 前缀 envs/ + renv 库）
+sbatch src/pipeline/sbatch/build_env.sh
+
+# 2) 冒烟测试（normal_test 队列，验证环境 + 前处理 + SPARK-X）
+sbatch src/pipeline/sbatch/test.sh
+
+# 3) 大数据集全流程示例：Visium_HD_Mouse_Kidney
+#    前处理 → cpu(SPARK/nnSVG) 与 gpu(SpaSEG) 并行 → 评估
+Jp=$(sbatch src/pipeline/sbatch/Visium_HD_Mouse_Kidney_preprocess.sh | awk '{print $4}')
+Jc=$(sbatch --dependency=afterok:$Jp src/pipeline/sbatch/Visium_HD_Mouse_Kidney_cpu.sh | awk '{print $4}')
+Jg=$(sbatch --dependency=afterok:$Jp src/pipeline/sbatch/Visium_HD_Mouse_Kidney_gpu.sh | awk '{print $4}')
+sbatch --dependency=afterok:$Jc,$Jg src/pipeline/sbatch/eval.sh Visium_HD_Mouse_Kidney
+```
+
+HPC 各数据集与脚本的对应关系、队列选择见下方「HPC 提交说明」。
+
 ## 脚本参数
 
 ### models_benchmark.sh
@@ -118,18 +161,30 @@ bash src/pipeline/models_benchmark.sh --dataset mouse_brain_STARmap
 
 ## 数据集
 
-`configs/datasets.json` 中注册的数据集 key：
+`configs/datasets.json` 注册的数据集 key（共 19 个），按运行位置划分：
 
-```
-mouse_brain_STARmap            STARmap / 2D（默认）
-Visium_Mouse_Olfactory_Bulb    Visium / 2D
-DLPFC_151507 ~ DLPFC_151510    10x Visium / 2D
-MERFISH_Moffitt                MERFISH / 2D
-Visium_HD_Mouse_Kidney         Visium HD / 2D
-STARmap_AD_13m_ctrl_rep1       STARmap / 2D
-Stereo_seq_drosophila          stereo-seq / 3D（仅 SPARK-X）
-Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
-```
+### 本地运行（小规模）
+
+| key | 技术 / 维度 |
+|---|---|
+| mouse_brain_STARmap | STARmap / 2D（默认） |
+| STARmap_AD_13m_ctrl_rep1 / rep2 | STARmap / 2D |
+| STARmap_AD_13m_disease_rep1 / rep2 | STARmap / 2D |
+| STARmap_AD_8m_ctrl_rep1 / rep2 | STARmap / 2D |
+| STARmap_AD_8m_disease_rep1 / rep2 | STARmap / 2D |
+| Visium_Mouse_Olfactory_Bulb | Visium / 2D |
+| DLPFC_151507 / 151508 / 151509 | 10x Visium / 2D |
+
+### HPC 运行（大规模）
+
+| key | 技术 / 维度 | 说明 |
+|---|---|---|
+| DLPFC_151510 | 10x Visium / 2D | 保留用于 HPC 运行测试 |
+| Visium_HD_Mouse_Kidney | Visium HD / 2D | 50 万 bin |
+| Visium_HD_Human_Breast_Cancer | Visium HD / 2D | 需先在 HPC 转换 feature_slice.h5 |
+| MERFISH_Moffitt | MERFISH / 2D | 103 万 spot |
+| Stereo_seq_drosophila | stereo-seq / 3D | 仅 SPARK-X |
+| Slide_seq_OB2_3D | Slide-seq / 3D | 仅 SPARK-X，3D 重建待实现 |
 
 ## 项目结构
 
@@ -141,14 +196,19 @@ Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
 ├── .Rprofile                          # 进入项目根自动挂载 renv 项目库
 ├── configs/
 │   ├── datasets.json                  # 数据集注册表
+│   ├── run_params.json                # 每数据集的差异化运行参数（nnSVG 过滤/SpaGCN 域数等）
 │   └── model_params/                  # 各方法超参数
 ├── data/                              # 输入 h5ad（各技术子目录）
 ├── envs/                              # conda 前缀（gitignore，由 setup 脚本重建）
 ├── results/local_results/             # 输出（每数据集一目录）
 └── src/
     ├── __init__.py                    # 路径/常量/数据集注册/共同前处理核心
-    ├── pipeline/models_benchmark.sh   # 主控流水线脚本（Bash，Linux/HPC）
-    ├── preprocess/h5ad_preprocess.py  # 共同前处理 CLI
+    ├── pipeline/
+    │   ├── models_benchmark.sh        # 主控流水线脚本（Bash，本地/HPC 通用）
+    │   └── sbatch/                    # HPC 各数据集的 SBATCH 提交脚本
+    ├── preprocess/
+    │   ├── h5ad_preprocess.py         # 共同前处理 CLI
+    │   └── 10xVisium_pretreat_h5toh5ad.py  # Visium HD feature_slice.h5 -> h5ad 转换
     ├── r_models/
     │   ├── run_spark.r                # SPARK-X
     │   └── run_nnSVG.r                # nnSVG
@@ -161,10 +221,33 @@ Slide_seq_OB2_3D               Slide-seq 3D（仅 SPARK-X）
 
 ## HPC 提交说明
 
+### SBATCH 脚本清单（`src/pipeline/sbatch/`）
+
+| 脚本 | 数据集 | 队列 |
+|---|---|---|
+| build_env.sh | 通用（建环境） | 7542-64C-512G |
+| test.sh | 冒烟测试（normal_test） | normal_test |
+| eval.sh | 通用评估，`sbatch eval.sh <dataset>` | 7542-64C-512G |
+| DLPFC_151510_cpu/gpu.sh | DLPFC_151510（测试保留） | 7542 / gpu_v100 |
+| Visium_HD_Mouse_Kidney_{preprocess,cpu,gpu}.sh | Visium_HD_Mouse_Kidney | 7542 / gpuB |
+| Visium_HD_Human_Breast_Cancer_{convert,preprocess,cpu}.sh | Human_Breast_Cancer | 6126-24C-768G |
+| MERFISH_Moffitt_{preprocess,cpu,gpu}.sh | MERFISH | 6126-24C-768G / gpuB |
+| Stereo_seq_drosophila_cpu.sh | Stereo_seq（3D） | 6126-24C-768G |
+| Slide_seq_OB2_3D_cpu.sh | Slide_seq（3D） | 6126-24C-768G |
+
+### 队列选型原则
+
+- **CPU**：spot <1 万 → `6240-36C-192G`；1 万~50 万 → `7542-64C-512G`；
+  dense 大矩阵 / 50 万+ → `6126-24C-768G`。
+- **GPU**：spot <1 万 → `gpu_v100`（32G）；≥1 万 → `gpuB`（80G）。
+- **SpaGCN** 邻接矩阵 O(n²)，>几万 spot 不适用（Visium_HD / MERFISH 跳过 SpaGCN）。
+
+### 其他说明
+
 1. conda 环境含绝对路径、不可跨节点搬移，需在 HPC 各节点分别执行
    `bash setup_linux_env.sh` 原地重建（代码随项目目录迁移）。
 2. 平台 Slurm 队列、存储配额、作业模板等合规要求见 [docs/HPC_note.md](docs/HPC_note.md)。
-3. 深度学习方法（SpaGCN / SpaSEG）建议申请 GPU 队列并用
-   `--device cuda`；SPARK-X / nnSVG 用 CPU 队列并给 nnSVG 指定 `--cores`。
-4. nnSVG 默认并行核数按「核数 ∩ 可用内存（每 worker 约 1.5GB）」自适应，避免小内存
-   节点 OOM；大内存节点显式传 `--cores N` 以获得更高并行度。
+3. nnSVG 默认并行核数按「核数 ∩ 可用内存（每 worker 约 1.5GB）」自适应；大内存节点
+   显式传 `--cores N`。
+4. 数据集级运行参数（nnSVG 过滤阈值等）在 `configs/run_params.json`，由
+   `models_benchmark.sh` 读取并注入环境变量。

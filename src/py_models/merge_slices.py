@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """merge_slices.py —— 把 2D 方法在 3D 数据上逐切片产出的 *_rank.csv 合并为单一排名。
 
-合并口径（docs/3d_svg_detection.md §5.3）：
-  - 每个基因在各切片的未校正 p 值用 Fisher 方法组合：
-        χ² = -2·Σ ln(p_i)，自由度 2k（k = 该基因实际被测的切片数）
-        p  = P(χ²_{2k} > χ²)
-  - 缺失/非有限 p 值的切片按 p=1（对 χ² 贡献 0）处理。
-  - 合并后对全体基因做 BH 校正，输出列与统一排名 CSV 一致：gene,stat,pval,padj,rank。
+合并口径（保守，docs/3d_svg_detection.md §5.3）：
+  - 同一基因取“实际被测到的切片”未校正 p 值的中位数作为合并 p 值：
+        p_g = median_i(p_i)，i ∈ {该基因被测到的切片}
+    相比 Fisher（-2Σln p 会因相邻切片相关而高估显著性），中位数不假设切片独立、稳健。
+  - 为避免“只在极少数切片被测到”的基因误导排名，默认要求至少 min_tested 片被测到才参与合并
+    （否则视为无法跨切片整合，不进入排名）。
+  - 合并后对保留基因做 BH 校正，输出列与统一排名 CSV 一致：gene,stat,pval,padj,rank。
 
 用法（项目根，envs/spatial 的 python）：
-  python src/py_models/merge_slices.py --method nnsvg --method-dir results/local_results/Slide_seq_OB2_3D/nnSVG --sample Slide_seq_OB2
+  python src/py_models/merge_slices.py --method spagcn --method-dir results/local_results/zebrafish_3hpf/spaGCN --sample zebrafish_3hpf --min-tested 2
 """
 import argparse
 import re
@@ -53,9 +54,8 @@ def _bh_correct(pvals: np.ndarray) -> np.ndarray:
     return out
 
 
-def merge(method_dir: Path, method: str, sample: str, out: Path = None):
-    from scipy.stats import chi2
-
+def merge(method_dir: Path, method: str, sample: str, out: Path = None,
+          min_tested: int = 2):
     paths = _find_slice_csvs(method_dir, method, sample)
     src.log_message(f"合并 {len(paths)} 个切片: {[p.name for p in paths]}")
 
@@ -79,19 +79,17 @@ def merge(method_dir: Path, method: str, sample: str, out: Path = None):
     merged_p = {}
     tested_n = {}
     for g in genes:
-        ps = []
-        tested = 0
-        for sm in slice_maps:
-            if g in sm:
-                ps.append(sm[g])
-                tested += 1
-            else:
-                ps.append(1.0)
-        chi2_val = -2.0 * sum(np.log(p) for p in ps)
-        merged_p[g] = float(chi2.sf(chi2_val, 2 * tested)) if tested > 0 else 1.0
-        tested_n[g] = tested
+        ps = [sm[g] for sm in slice_maps if g in sm]
+        tested_n[g] = len(ps)
+        # 仅对被测到的切片取中位数；不足 min_tested 片不进入排名
+        merged_p[g] = float(np.median(ps)) if len(ps) >= min_tested else np.nan
 
-    g_arr = np.array(genes)
+    keep = [g for g in genes if tested_n[g] >= min_tested]
+    dropped = len(genes) - len(keep)
+    if dropped:
+        src.log_message(f"少于 {min_tested} 片被测而排除的基因: {dropped} 个")
+
+    g_arr = np.array(keep)
     p_arr = np.array([merged_p[g] for g in g_arr])
     padj = _bh_correct(p_arr)
 
@@ -110,24 +108,27 @@ def merge(method_dir: Path, method: str, sample: str, out: Path = None):
     res.to_csv(out, index=False)
     src.log_message(f"已保存合并排名: {out} ({len(res)} 个基因)")
 
-    tn = np.array([tested_n[g] for g in g_arr])
-    src.log_message(f"每基因被测切片数分布: min={tn.min()} median={int(np.median(tn))} "
-                    f"max={tn.max()}（切片总数 {len(paths)}）")
+    tn = np.array([tested_n[g] for g in keep])
+    if len(tn):
+        src.log_message(f"每基因被测切片数分布: min={tn.min()} median={int(np.median(tn))} "
+                        f"max={tn.max()}（切片总数 {len(paths)}）")
     return res
 
 
 def main():
-    ap = argparse.ArgumentParser(description="合并逐切片 rank CSV（Fisher + BH）")
+    ap = argparse.ArgumentParser(description="合并逐切片 rank CSV（p 值中位数 + BH）")
     ap.add_argument("--method", required=True, choices=list(_PREFIX),
                     help="方法名（nnsvg/spagcn/spaseg）")
     ap.add_argument("--method-dir", required=True, help="方法输出目录（如 .../nnSVG）")
     ap.add_argument("--sample", required=True, help="样本标签（不含 _S<i> 后缀）")
+    ap.add_argument("--min-tested", type=int, default=2,
+                    help="至少被测到的切片数（默认 2）")
     ap.add_argument("--out", default=None, help="合并输出 CSV（默认 <method-dir>/SVG_<METHOD>_<sample>_rank.csv）")
     args = ap.parse_args()
 
     src.log_header(f"合并切片排名: {args.method} / {args.sample}")
     merge(Path(args.method_dir), args.method, args.sample,
-          Path(args.out) if args.out else None)
+          Path(args.out) if args.out else None, min_tested=args.min_tested)
     src.log_message("合并完成", section="完成")
 
 

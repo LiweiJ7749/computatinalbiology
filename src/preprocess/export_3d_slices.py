@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
-"""export_3d_slices.py —— 把 dim=3 数据逐切片导出为 2D 方法（nnSVG/SpaGCN/SpaSEG）输入。
+"""export_3d_slices.py —— 把 dim=3 数据逐切片导出为 2D 方法（SpaGCN/SpaSEG）输入。
 
-背景：SPARK-X 走原生 3D（见 src._preprocess_run_3d / run_spark.r）；而 nnSVG/SpaGCN/SpaSEG
+背景：SPARK-X 走原生 3D（见 src._preprocess_run_3d / run_spark.r）；而 SpaGCN/SpaSEG
 受 2D 底层假设约束，只能在 3D 数据上做“逐切片 2D 检测 + 跨切片合并”（docs/3d_svg_detection.md）。
+（nnSVG 因逐切片运行过慢，已从 3D 逐切片方案中移除。）
 
 本脚本只负责“逐切片生成 2D 输入”，运行与合并分别由
-src/pipeline/run_3d_benchmark.sh 与 src/py_models/merge_slices.py 完成：
+src/pipeline/run_3d_slices_benchmark.sh 与 src/py_models/merge_slices.py 完成：
 
   - Slide-seq : 每个切片文件即 1 片（run["slices"]）
   - Stereo-seq: 单文件按 obs['slice_ID']（回退 spatial 第 3 列 z）切分
 
 输出目录约定（sample 后缀加 _S<i>）：
-  nnSVG : <outdir>/nnSVG/slices/S<i>/           counts.mtx/genes.csv/barcodes.csv/location.csv
   SpaGCN: <outdir>/spaGCN/slices/S<i>/spaGCN/   <sample>_S<i>_spaGCN.h5ad
   SpaSEG: <outdir>/spaSEG/slices/S<i>/spaSEG/   <sample>_S<i>_spaSEG.h5ad
 
 用法（项目根，envs/spatial 的 python）：
-  python src/preprocess/export_3d_slices.py --dataset Slide_seq_OB2_3D --methods nnsvg spagcn spaseg
-  python src/preprocess/export_3d_slices.py --dataset Stereo_seq_drosophila --methods nnsvg
+  python src/preprocess/export_3d_slices.py --dataset Slide_seq_OB2_3D --methods spagcn spaseg
+  python src/preprocess/export_3d_slices.py --dataset Stereo_seq_drosophila --methods spagcn
 """
 import argparse
 import sys
@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import src  # noqa: E402
 
-TWO_D_METHODS = ("nnsvg", "spagcn", "spaseg")
+TWO_D_METHODS = ("spagcn", "spaseg")
 
 
 def _resolve(args):
@@ -46,15 +46,12 @@ def _resolve(args):
 def _slice_dir(run, method, i):
     """返回方法 m 的第 i 片数据目录。"""
     sub = src.METHOD_SUBDIRS[method]
-    return run["outdir"] / sub / "slices" / f"S{i}" / (sub if method != "nnsvg" else "")
+    return run["outdir"] / sub / "slices" / f"S{i}" / sub
 
 
 def _export_one(adata, tp, run, method, i, sample_slice):
     """把单个 2D 切片导出为方法 method 的输入。"""
-    if method == "nnsvg":
-        outdir = _slice_dir(run, "nnsvg", i)
-        src.export_r_format(adata, tp, outdir, tech=run.get("tech"), dim=2)
-    elif method == "spagcn":
+    if method == "spagcn":
         outdir = _slice_dir(run, "spagcn", i)
         src.prepare_spagcn(adata, tp, None, outdir, sample_slice)
     elif method == "spaseg":
@@ -89,10 +86,12 @@ def export_stereoseq(run, methods):
     adata = ad.read_h5ad(run["h5ad"])
     ids = src.stereo_slice_ids(adata)
     src.log_message(f"[Stereo-seq] 共 {len(ids)} 个切片 id: {ids}")
+    col = src.stereo_slice_col(adata)
     for i, sid in enumerate(ids):
-        mask = adata.obs["slice_ID"].astype(str).to_numpy() == sid \
-            if "slice_ID" in adata.obs.columns else \
-            np.asarray(adata.obsm["spatial"], dtype=float)[:, 2] == float(sid)
+        if col is not None:
+            mask = adata.obs[col].astype(str).to_numpy() == sid
+        else:
+            mask = np.asarray(adata.obsm["spatial"], dtype=float)[:, 2] == float(sid)
         barcodes = [b for b, k in zip(adata.obs.index, mask) if k]
         subset = src._subset_adata(adata, barcodes)
         tp = _tp_from_subset(subset, run.get("tech"))
@@ -121,10 +120,11 @@ def main():
 
     if run.get("tech") == "Slide_seq":
         export_slideseq(run, args.methods)
-    elif run.get("tech") == "Stereo_seq":
+    elif run.get("tech") in ("Stereo_seq", "Stereo_seq_zf"):
         export_stereoseq(run, args.methods)
     else:
-        raise SystemExit(f"技术类型 {run.get('tech')!r} 尚无逐切片导出实现（仅 Slide_seq/Stereo_seq）")
+        raise SystemExit(f"技术类型 {run.get('tech')!r} 尚无逐切片导出实现"
+                         "（仅 Slide_seq/Stereo_seq/Stereo_seq_zf）")
 
     src.log_message("逐切片导出完成", section="完成")
 

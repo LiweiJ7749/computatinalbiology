@@ -139,5 +139,23 @@
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173963_OB2-Slide19_slide-seqv2_processed.h5ad",
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173964_OB2-Slide20_slide-seqv2_processed.h5ad"
     ]
+  },
+  "zebrafish_3hpf": {
+    "h5ad": "data/stereo-seq/zebrafish/zf3_stereoseq.h5ad",
+    "sample": "zebrafish_3hpf",
+    "tech": "Stereo_seq_zf",
+    "dim": 3
+  },
+  "zebrafish_5hpf": {
+    "h5ad": "data/stereo-seq/zebrafish/zf5_stereoseq.h5ad",
+    "sample": "zebrafish_5hpf",
+    "tech": "Stereo_seq_zf",
+    "dim": 3
+  },
+  "zebrafish_10hpf": {
+    "h5ad": "data/stereo-seq/zebrafish/zf10_stereoseq.h5ad",
+    "sample": "zebrafish_10hpf",
+    "tech": "Stereo_seq_zf",
+    "dim": 3
   }
 }

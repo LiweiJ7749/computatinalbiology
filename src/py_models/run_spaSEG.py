@@ -295,32 +295,46 @@ def _detect_svgs_sparse(adata):
 def detect_svgs(adata):
     # 处理仅含 1 个 spot 的域（wilcoxon 需要每组 >=2）
     adata = merge_small_domains(adata, min_size=2)
+    # 单域无法做“域内 vs 域外”比较，vendor _ranks_svg 会因 out_groups 为空而崩溃
+    if adata.obs["SpaSEG_clusters"].nunique() <= 1:
+        src.log_message("空间域数量 <= 1，无法做域间差异 SVG 检测，返回空结果")
+        return pd.DataFrame(), adata
     if adata.n_obs > LARGE_N_SPOTS:
         return _detect_svgs_sparse(adata)
 
     from downstream.svg import detect_svg  # noqa
 
+    # 兼容 dense X（如 drosophila Stereo-seq）：vendor detect_svg 的 _data_prep
+    # 假设 X 是稀疏矩阵并调用 X.toarray()，dense 时需先转 csr。
+    from scipy import sparse
+    if not sparse.issparse(adata.X):
+        adata.X = sparse.csr_matrix(adata.X)
+
     src.log_step(4, 6, "逐空间域检测 SVG（detect_svg, 官方默认过滤）")
     # STARmap var 无 'mt' 列（只有 'mito'），故 filter_mt=False；
     # use_log=False 时 _data_prep 会把 log1p 表达 expm1 回伪 counts 再做 Wilcoxon（官方默认）。
-    svg_df, _adata = detect_svg(
-        adata,
-        target_domains="all",
-        filter_mt=False,
-        use_log=False,
-        domain_labels="SpaSEG_clusters",
-        do_filter=True,
-    )
-    if svg_df is None or len(svg_df) == 0:
-        src.log_message("严格过滤后 0 条，降级为不过滤输出全量排名...")
+    try:
         svg_df, _adata = detect_svg(
             adata,
             target_domains="all",
             filter_mt=False,
             use_log=False,
             domain_labels="SpaSEG_clusters",
-            do_filter=False,
+            do_filter=True,
         )
+        if svg_df is None or len(svg_df) == 0:
+            src.log_message("严格过滤后 0 条，降级为不过滤输出全量排名...")
+            svg_df, _adata = detect_svg(
+                adata,
+                target_domains="all",
+                filter_mt=False,
+                use_log=False,
+                domain_labels="SpaSEG_clusters",
+                do_filter=False,
+            )
+    except Exception as e:
+        src.log_message(f"detect_svg 失败: {e}，返回空结果")
+        return pd.DataFrame(), adata
     src.log_message(f"共检测到 SVG 记录 = {len(svg_df)}")
     return svg_df, _adata
 
@@ -385,6 +399,9 @@ def plot_domains(adata, outdir, sample):
 
 def plot_top_svgs(adata, svg_df, outdir, sample):
     """Top SVG 基因的空间表达图。"""
+    if svg_df is None or len(svg_df) == 0 or "gene" not in svg_df.columns:
+        src.log_message("无 SVG 记录，跳过 Top 绘图")
+        return
     genes = svg_df["gene"].tolist()[:TOP_N]
     src.log_message(f"Top SVG 基因: {genes}")
     xy = adata.obsm["spatial"]

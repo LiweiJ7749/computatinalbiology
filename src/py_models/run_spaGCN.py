@@ -225,10 +225,15 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     import scanpy as sc
 
     src.log_step(5, 6, "逐空间域检测 SVG（并计算全基因排名）")
-    plot_spatial_domains_ez_mode(
-        adata, domain_name="refined_pred", x_name=x_name, y_name=y_name,
-        plot_color=sc.pl.palettes.default_102, size=40,
-        save_dir=str(outdir / f"domains_spaGCN_{sample}.png"))
+    try:
+        plot_spatial_domains_ez_mode(
+            adata, domain_name="refined_pred", x_name=x_name, y_name=y_name,
+            plot_color=sc.pl.palettes.default_102, size=40,
+            save_dir=str(outdir / f"domains_spaGCN_{sample}.png"))
+    except Exception as e:
+        # 某些物种基因名与坐标列同名（如 Drosophila 的 "y" 基因），scanpy scatter
+        # 会报 Key 二义性；绘图是辅助产物，失败不应阻断 SVG 检测。
+        src.log_message(f"空间域绘图失败（不影响 SVG 检测）: {e}")
 
     cell_id = adata.obs.index.tolist()
     x = adata.obs[x_name].tolist()
@@ -321,12 +326,16 @@ def plot_top_svgs(adata, svg_df, x_name, y_name, outdir, sample, top_n=6):
         expr = np.asarray(col.toarray()).ravel() if hasattr(col, "toarray") else np.asarray(col).ravel()
         tmp = adata.copy()
         tmp.obs["exp"] = expr
-        fig = sc.pl.scatter(tmp, alpha=1, x=x_name, y=y_name, color="exp",
-                            title=g, color_map="viridis", show=False, size=40)
-        fig.set_aspect("equal", "box")
-        fig.axes.invert_yaxis()
-        fig.figure.savefig(str(outdir / f"SVG_spaGCN_{sample}_{g}.png"), dpi=300)
-        plt.close(fig.figure)
+        try:
+            fig = sc.pl.scatter(tmp, alpha=1, x=x_name, y=y_name, color="exp",
+                                title=g, color_map="viridis", show=False, size=40)
+            fig.set_aspect("equal", "box")
+            fig.axes.invert_yaxis()
+            fig.figure.savefig(str(outdir / f"SVG_spaGCN_{sample}_{g}.png"), dpi=300)
+            plt.close(fig.figure)
+        except Exception as e:
+            src.log_message(f"Top SVG 绘图失败 {g}: {e}")
+            continue
     src.log_message(f"已保存 Top SVG 空间表达图到 {outdir}")
 
 

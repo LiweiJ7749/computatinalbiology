@@ -145,7 +145,7 @@ DATASETS = _config_datasets if _config_datasets else {
 # 3b) 技术类型（tech type）注册：不同平台 h5ad 数据结构差异的独立参数
 # ---------------------------------------------------------------------------
 TECH_TYPES = ("STARmap", "Visium", "Visium_HD", "DLPFC",
-              "MERFISH", "Slide_seq", "Stereo_seq")
+              "MERFISH", "Slide_seq", "Stereo_seq", "Stereo_seq_zf")
 
 
 def _normalize_tech(tech) -> str:
@@ -164,6 +164,9 @@ def _normalize_tech(tech) -> str:
         return "Slide_seq"
     if t in ("stereo_seq", "stereoseq", "st_seq"):
         return "Stereo_seq"
+    if t in ("stereo_seq_zf", "stereoseq_zf", "stereo_zf", "zebrafish",
+             "zebrafish_stereo"):
+        return "Stereo_seq_zf"
     if t == "dlpfc":
         return "DLPFC"
     if "visium" in t:
@@ -199,6 +202,7 @@ def tech_profile(tech: str) -> dict:
         "MERFISH":    {"coords": "obsm_spatial", "counts": "raw_count", "histology": False},
         "Slide_seq":  {"coords": "obsm_spatial", "counts": "X", "histology": False},
         "Stereo_seq": {"coords": "obsm_spatial", "counts": "raw_counts", "histology": False},
+        "Stereo_seq_zf": {"coords": "obs_spatial_xy", "counts": "counts", "histology": False},
     }
     return profiles.get(t, {"coords": "auto", "counts": "auto", "histology": False})
 
@@ -528,8 +532,21 @@ def load_coords(h5ad, spatial_arg, tech=None, h5ad_path=None, dim=2) -> "pd.Data
         if coords_src == "obsm_spatial":
             raise FileNotFoundError("技术类型要求 obsm['spatial']，但 h5ad 中缺失")
 
+    if coords_src == "obs_spatial_xy":
+        if "spatial_x" in h5ad.obs.columns and "spatial_y" in h5ad.obs.columns:
+            x = h5ad.obs["spatial_x"].astype(float).to_numpy()
+            y = h5ad.obs["spatial_y"].astype(float).to_numpy()
+            if int(dim or 2) == 3:
+                zcol = "slice" if "slice" in h5ad.obs.columns else "slice_ID"
+                if zcol not in h5ad.obs.columns:
+                    raise ValueError("dim=3 需要 obs['slice']（或 slice_ID）作为 z 切片索引")
+                z = h5ad.obs[zcol].astype(float).to_numpy()
+                return pd.DataFrame({"x": x, "y": y, "z": z}, index=h5ad.obs.index)
+            return pd.DataFrame({"x": x, "y": y}, index=h5ad.obs.index)
+        raise FileNotFoundError("技术类型要求 obs['spatial_x']/spatial_y，但 h5ad 中缺失")
+
     raise FileNotFoundError("找不到坐标来源"
-                            "(tissue_positions.csv / spatial.tar.gz / obsm['spatial'])")
+                            "(tissue_positions.csv / spatial.tar.gz / obsm['spatial'] / obs spatial_x/y)")
 
 
 def _raw_counts_matrix(h5ad, tech=None):
@@ -804,16 +821,26 @@ def _subset_adata(adata, barcodes):
     )
 
 
+def stereo_slice_col(adata):
+    """返回 Stereo-seq 切片分组列名（优先 slice_ID，其次 slice；无则 None）。"""
+    for c in ("slice_ID", "slice"):
+        if c in adata.obs.columns:
+            return c
+    return None
+
+
 def stereo_slice_ids(adata):
     """返回 Stereo-seq 的切片 id 列表（字符串，保持出现顺序）。
 
-    优先 obs['slice_ID']（0~15）；缺失时回退 obsm['spatial'] 第 3 列（z）的唯一值。
+    优先 obs['slice_ID']（drosophila），其次 obs['slice']（zebrafish）；
+    均无时回退 obsm['spatial'] 第 3 列（z）的唯一值。
     """
     import numpy as np
     import pandas as pd
 
-    if "slice_ID" in adata.obs.columns:
-        return [str(v) for v in pd.unique(adata.obs["slice_ID"].astype(str))]
+    col = stereo_slice_col(adata)
+    if col is not None:
+        return [str(v) for v in pd.unique(adata.obs[col].astype(str))]
     z = np.asarray(adata.obsm["spatial"], dtype=float)[:, 2]
     return [str(v) for v in np.unique(z)]
 
@@ -911,7 +938,7 @@ def _preprocess_run_3d(run, methods):
     ensure_run_dirs(run, methods=methods)
     tech = run.get("tech")
 
-    if tech == "Stereo_seq":
+    if tech in ("Stereo_seq", "Stereo_seq_zf"):
         _preprocess_stereo3d(run)
     elif tech == "Slide_seq":
         z_spacing = float(run.get("z_spacing") or 1.0)

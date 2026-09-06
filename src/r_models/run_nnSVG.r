@@ -209,32 +209,41 @@ png1 <- file.path(out_dir, sprintf("SVG_nnSVG_%s_top.png", sample))
 ggsave(png1, p1, width = 8, height = 6, dpi = 150)
 log_msg(sprintf("已保存展示图: %s", png1))
 
-# 2) Top-1 SVG 的空间表达图（按 res_df 排序取 rank 1，并映射回 spe 行）
-ix_name <- as.character(res_df$gene[1])
-ix <- which(rowData(spe)$gene_name == ix_name)
-if (length(ix) == 0) ix <- 1L
-df <- data.frame(
-  x = spatialCoords(spe)[, "pxl_col_in_fullres"],
-  y = spatialCoords(spe)[, "pxl_row_in_fullres"],
-  expr = as.numeric(counts(spe)[ix, ])
-)
-p2 <- ggplot(df, aes(x = x, y = y, color = expr)) +
-  geom_point(size = 0.8) +
-  coord_fixed() +
-  scale_y_reverse() +
-  scale_color_gradient(low = "gray90", high = "blue", trans = "sqrt",
-                       breaks = range(df$expr), name = "counts") +
-  ggtitle(paste0(ix_name, " (top SVG)")) +
-  theme_bw() +
-  theme(plot.title = element_text(face = "italic"),
-        panel.grid = element_blank(),
-        axis.title = element_blank(),
-        axis.text = element_blank(),
-        axis.ticks = element_blank())
+# 2) Top-N SVG 的空间表达图（ggplot2，Cell 风格绿色系；与 Python 侧一致）
+spatial_top_n <- 6
+spatial_genes <- head(res_df$gene, spatial_top_n)
+loc_x <- spatialCoords(spe)[, "pxl_col_in_fullres"]
+loc_y <- spatialCoords(spe)[, "pxl_row_in_fullres"]
 
-png2 <- file.path(out_dir, sprintf("SVG_nnSVG_%s_top1_spatial.png", sample))
-ggsave(png2, p2, width = 7, height = 6, dpi = 150)
-log_msg(sprintf("已保存空间表达图: %s", png2))
+for (g in spatial_genes) {
+  ix <- which(rowData(spe)$gene_name == g)
+  if (length(ix) == 0) next
+  ix <- ix[1]
+  df <- data.frame(
+    x = loc_x,
+    y = loc_y,
+    expr = as.numeric(logcounts(spe)[ix, ])
+  )
+  g_safe <- gsub("[^A-Za-z0-9_.-]", "_", g)
+  p2 <- ggplot(df, aes(x = x, y = y, color = expr)) +
+    geom_point(size = 0.8) +
+    coord_fixed() +
+    scale_y_reverse() +
+    scale_color_gradientn(
+      colours = c("#F5F7F5", "#82E0AA", "#1E8449", "#186138"),
+      name = "logcounts") +
+    ggtitle(sprintf("%s (nnSVG top SVG)", g)) +
+    theme_bw() +
+    theme(plot.title = element_text(face = "italic"),
+          panel.grid = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank())
+
+  png2 <- file.path(out_dir, sprintf("SVG_nnSVG_%s_%s.png", sample, g_safe))
+  ggsave(png2, p2, width = 7, height = 6, dpi = 150)
+}
+log_msg(sprintf("已保存 Top %d SVG 空间表达图", spatial_top_n))
 
 log_header("完成")
 log_msg("nnSVG 完成")

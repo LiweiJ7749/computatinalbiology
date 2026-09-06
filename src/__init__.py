@@ -77,13 +77,13 @@ MODEL_SCRIPTS = {
     "spaseg": SRC_DIR / "py_models" / "run_spaSEG.py",
 }
 
-# 统一方法颜色（ColorBrewer Set1 前四色，Python 绘图 / evaluation 使用；
-# R 脚本中无法 import 本模块，在脚本内硬编码同一组 hex 以保证跨语言一致）。
+# 统一方法颜色（Cell 风格多类别通用配色，色盲友好、低饱和；Python 绘图 /
+# evaluation 使用；R 脚本中无法 import 本模块，在脚本内硬编码同一组 hex 以保证跨语言一致）。
 METHOD_COLORS = {
-    "spark":  "#E41A1C",   # 红
-    "nnsvg":  "#377EB8",   # 蓝
-    "spagcn": "#4DAF4A",   # 绿
-    "spaseg": "#984EA3",   # 紫
+    "spark":  "#0052A2",   # 深蓝
+    "nnsvg":  "#EB7400",   # 橙
+    "spagcn": "#006B3F",   # 深绿
+    "spaseg": "#805190",   # 紫
 }
 METHOD_LABELS = {
     "spark":  "SPARK-X",
@@ -91,6 +91,12 @@ METHOD_LABELS = {
     "spagcn": "SpaGCN",
     "spaseg": "SpaSEG",
 }
+
+# Cell 风格连续色阶（低饱和、色盲友好）：供 evaluation 与 spatial_svg_plots 统一使用，
+# 避免默认 viridis/RdBu 的"matplotlib 默认感"。使用处用 LinearSegmentedColormap.from_list
+# 从这些 hex 列表构建 colormap。
+CELL_EXPR_COLORS = ["#F5F7F5", "#82E0AA", "#1E8449", "#186138"]     # 连续表达：浅灰 -> 绿
+CELL_DIVERGING_COLORS = ["#2E5A88", "#F5F5F5", "#D95F02"]           # 发散/残差：蓝 -> 灰 -> 橙
 
 # ---------------------------------------------------------------------------
 # 3) 数据集注册表（可被命令行显式参数覆盖）

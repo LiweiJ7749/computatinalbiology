@@ -146,5 +146,38 @@ png_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_top.png", sample))
 ggsave(png_path, p, width = 8, height = 6, dpi = 150)
 log_msg(sprintf("已保存展示图: %s", png_path))
 
+# ---------- Top SVG 空间表达图（ggplot2，Cell 风格绿色系）----------
+# 与 Python 侧 spatial_svg_plots.py 的连续表达色阶一致：
+#   浅灰 #F5F7F5 -> 浅绿 #82E0AA -> 主绿 #1E8449 -> 深绿 #186138
+spatial_top_n <- 6
+spatial_genes <- head(res_df$gene, spatial_top_n)
+loc_x <- if ("x" %in% colnames(loc)) loc[, "x"] else loc[, 1]
+loc_y <- if ("y" %in% colnames(loc)) loc[, "y"] else loc[, 2]
+
+for (g in spatial_genes) {
+  ix <- match(g, genes)
+  if (is.na(ix)) next
+  expr <- as.numeric(as.matrix(counts[ix, ]))
+  df <- data.frame(x = loc_x, y = loc_y, expr = expr, stringsAsFactors = FALSE)
+  g_safe <- gsub("[^A-Za-z0-9_.-]", "_", g)
+  p_sp <- ggplot(df, aes(x = x, y = y, color = expr)) +
+    geom_point(size = 0.8) +
+    coord_fixed() +
+    scale_y_reverse() +
+    scale_color_gradientn(
+      colours = c("#F5F7F5", "#82E0AA", "#1E8449", "#186138"),
+      trans = "sqrt", name = "counts") +
+    ggtitle(sprintf("%s (SPARK-X top SVG)", g)) +
+    theme_bw() +
+    theme(plot.title = element_text(face = "italic"),
+          panel.grid = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank())
+  sp_path <- file.path(out_dir, sprintf("SVG_SPARK_%s_%s.png", sample, g_safe))
+  ggsave(sp_path, p_sp, width = 7, height = 6, dpi = 150)
+}
+log_msg(sprintf("已保存 Top %d SVG 空间表达图", spatial_top_n))
+
 log_header("完成")
 log_msg("SPARK-X 完成")

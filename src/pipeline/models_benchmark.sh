@@ -39,6 +39,7 @@ CORES=""
 DEVICE="auto"
 SKIP_PRE=0
 SKIP_EVAL=0
+SKIP_SPATIAL=0
 ALL_METHODS="spark nnsvg spagcn spaseg"
 
 usage() {
@@ -54,6 +55,7 @@ usage() {
   --device DEV         python 模型设备（auto/cuda/cpu，默认 auto）
   --skip-preprocess    跳过共同前处理（要求数据已生成）
   --skip-eval          跳过最后的 evaluation.py 调用
+  --skip-spatial       跳过空间 SVG 可视化（spatial_svg_plots.py）
   -h, --help
 环境变量: SVG_PYTHON / SVG_RSCRIPT（解释器路径覆盖）
 EOF
@@ -71,6 +73,7 @@ while [ $# -gt 0 ]; do
     --device)  DEVICE="${2:-}"; shift 2 ;;
     --skip-preprocess) SKIP_PRE=1; shift ;;
     --skip-eval)       SKIP_EVAL=1; shift ;;
+    --skip-spatial)    SKIP_SPATIAL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[错误] 未知参数: $1" >&2; usage; exit 1 ;;
   esac
@@ -286,6 +289,20 @@ if [ "$SKIP_EVAL" -eq 0 ]; then
       log_msg "[警告] evaluation.py 返回非零"
   else
     log_msg "[跳过] src/utils/evaluation.py 不存在"
+  fi
+fi
+
+# ---------------- 4) 空间 SVG 可视化 ----------------
+if [ "$SKIP_SPATIAL" -eq 0 ]; then
+  log_header "步骤 4: 空间 SVG 可视化 (spatial_svg_plots.py)"
+  SPATIAL_SCRIPT="$ROOT/src/utils/spatial_svg_plots.py"
+  if [ -f "$SPATIAL_SCRIPT" ]; then
+    "$PYTHON" "$SPATIAL_SCRIPT" --dataset "$DATASET" --outdir "$OUTDIR" \
+      --sample "$SAMPLE" --methods "$(echo ${METHODS} | tr ' ' ',')" \
+      2>&1 | tee -a "$OUTDIR/logs/spatial_svg.log" || \
+      log_msg "[警告] spatial_svg_plots.py 返回非零"
+  else
+    log_msg "[跳过] src/utils/spatial_svg_plots.py 不存在"
   fi
 fi
 

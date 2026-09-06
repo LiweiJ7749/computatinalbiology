@@ -26,6 +26,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 # ---------------------------------------------------------------------------
 # 项目路径 & 引入 src 初始化模块（import 无副作用、开销低）
@@ -36,6 +37,11 @@ if str(ROOT) not in sys.path:
 
 import src  # noqa: E402
 from src.utils import metrics as M  # noqa: E402
+
+# Cell 风格连续色阶（与 spatial_svg_plots.py 共用 src.CELL_*_COLORS 定义）
+CELL_EXPR_CMAP = LinearSegmentedColormap.from_list("cell_green", src.CELL_EXPR_COLORS)
+CELL_DIVERGING_CMAP = LinearSegmentedColormap.from_list(
+    "cell_div", src.CELL_DIVERGING_COLORS)
 
 # 各方法产出的统一排名 CSV 文件名前缀（与模型脚本实际写出名一致；
 # 注意 spark 目录名为 SPARK_X，但 CSV 前缀为 SPARK）。
@@ -287,7 +293,7 @@ def plot_effect_size_corr(rank_dfs: dict, moran_table: pd.DataFrame,
 
 
 def _annotated_heatmap(ax, mat: pd.DataFrame, vmin: float, vmax: float,
-                       cmap: str, title: str) -> None:
+                       cmap, title: str) -> None:
     im = ax.imshow(mat.to_numpy(dtype=np.float64), vmin=vmin, vmax=vmax,
                    cmap=cmap, aspect="auto")
     ax.set_xticks(range(len(mat.columns)))
@@ -308,8 +314,9 @@ def plot_rank_consensus(spearman_mat: pd.DataFrame, jaccard_mat: pd.DataFrame,
                         jaccard_k: int, out_path: Path) -> None:
     _setup_style()
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
-    _annotated_heatmap(axes[0], spearman_mat, -1.0, 1.0, "RdBu_r", "Spearman ρ")
-    _annotated_heatmap(axes[1], jaccard_mat, 0.0, 1.0, "viridis",
+    _annotated_heatmap(axes[0], spearman_mat, -1.0, 1.0, CELL_DIVERGING_CMAP,
+                       "Spearman ρ")
+    _annotated_heatmap(axes[1], jaccard_mat, 0.0, 1.0, CELL_EXPR_CMAP,
                        f"Top-{jaccard_k} Jaccard")
     fig.tight_layout()
     fig.savefig(out_path, dpi=200, bbox_inches="tight")

@@ -3,13 +3,14 @@
 #SBATCH --partition=7542-64C-512G
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --time=72:00:00
+#SBATCH --time=24:00:00
 #SBATCH -o hd_kidney_cpu.%j.out
 #SBATCH -e hd_kidney_cpu.%j.err
 
-# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因）：SPARK-X + nnSVG + SpaGCN
-# （前处理已由 preprocess 脚本单独完成，nnSVG/SpaGCN 的输入已按 bin_factor 聚合）。
-# 注意：nnSVG 逐基因 BRISC 在此规模仍较慢，日志里会分别打印各步耗时。
+# Visium_HD_Mouse_Kidney（502009 spot × 19336 基因）：预处理 + SPARK-X + SpaGCN
+# - SPARK-X 全分辨率（单核）
+# - SpaGCN 用 bin_factor=2（126113 meta-spot，邻接矩阵约 127GB，尽量充满 512G 内存）
+# - 放弃 nnSVG（BRISC 逐基因太慢，7.5h 未完成）；SpaSEG 见 hd_kidney_gpu.sh
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH
@@ -18,6 +19,5 @@ export SVG_RSCRIPT=$HOME/svg_methods/envs/spatial_R/bin/Rscript
 
 bash src/pipeline/models_benchmark.sh \
   --dataset Visium_HD_Mouse_Kidney \
-  --methods spark,nnsvg,spagcn \
-  --cores 8 \
-  --skip-preprocess --skip-eval
+  --methods spark,spagcn \
+  --skip-eval

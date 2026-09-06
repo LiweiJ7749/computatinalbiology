@@ -34,7 +34,7 @@
   "Visium_HD_Mouse_Kidney": {
     "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
     "spagcn": { "n_clusters": null },
-    "bin_factor": 5
+    "bin_factor": 2
   },
 
   "Visium_HD_Human_Breast_Cancer": {

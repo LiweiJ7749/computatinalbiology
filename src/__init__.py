@@ -787,6 +787,37 @@ def _copy_h5ad(h5ad):
     )
 
 
+def _subset_adata(adata, barcodes):
+    """按 barcode 列表子集化 AnnData（保持原始行序，用于 Stereo-seq 逐切片切分）。"""
+    import anndata as ad
+
+    keep = [b for b in adata.obs.index if b in set(barcodes)]
+    idx = [list(adata.obs.index).index(b) for b in keep]
+    return ad.AnnData(
+        X=adata.X[idx, :].copy(),
+        obs=adata.obs.iloc[idx].copy(),
+        var=adata.var.copy(),
+        layers={k: v[idx, :].copy() for k, v in adata.layers.items()},
+        obsm={k: (v[idx].copy() if hasattr(v, "__len__") and len(v) == adata.n_obs
+                  else v.copy()) for k, v in adata.obsm.items()},
+        uns={k: v for k, v in adata.uns.items()},
+    )
+
+
+def stereo_slice_ids(adata):
+    """返回 Stereo-seq 的切片 id 列表（字符串，保持出现顺序）。
+
+    优先 obs['slice_ID']（0~15）；缺失时回退 obsm['spatial'] 第 3 列（z）的唯一值。
+    """
+    import numpy as np
+    import pandas as pd
+
+    if "slice_ID" in adata.obs.columns:
+        return [str(v) for v in pd.unique(adata.obs["slice_ID"].astype(str))]
+    z = np.asarray(adata.obsm["spatial"], dtype=float)[:, 2]
+    return [str(v) for v in np.unique(z)]
+
+
 def histology_source(run: dict):
     """返回可提取组织学图像的 spatial.tar.gz 路径（无则 None）。"""
     sp = run.get("spatial")
@@ -799,18 +830,24 @@ def histology_source(run: dict):
     return tgz if tgz.exists() else None
 
 
-def _load_slideseq_3d(slice_paths, z_spacing=1.0):
+def _load_slideseq_3d(slice_paths, z_spacing=1.0, alignment=None):
     """把 Slide-seq 的连续 2D 切片堆叠为 3D（2D→3D 重建）。
 
     返回 (counts: spots x genes csr, gene_names, barcodes, coords_df)。
     - z 轴 = 切片序号 * z_spacing（注册表 reconstruction="stack_2d_slices"）。
     - 基因取各切片并集（首见顺序），缺失切片补 0。
     - barcode 加切片前缀保证跨切片唯一。
+    - ``alignment``：真实跨切片配准（PASTE / ICP 等）的预留接口；当前仅支持简单堆叠，
+      传入非 None 时打印“尚未实现”并回退简单堆叠（见 docs/3d_svg_detection.md §6）。
     """
     import numpy as np
     import pandas as pd
     import anndata as ad
     from scipy import sparse
+
+    if alignment is not None:
+        log_message(f"Slide-seq 切片配准 alignment={alignment!r} 尚未实现，"
+                    "回退简单堆叠（z = 切片序号 * z_spacing）")
 
     slices_coords, slices_X, slices_genes, all_barcodes = [], [], [], []
     seen_genes = set()
@@ -877,7 +914,10 @@ def _preprocess_run_3d(run, methods):
     if tech == "Stereo_seq":
         _preprocess_stereo3d(run)
     elif tech == "Slide_seq":
-        counts, genes, barcodes, coords_df = _load_slideseq_3d(run["slices"])
+        z_spacing = float(run.get("z_spacing") or 1.0)
+        alignment = run.get("alignment")
+        counts, genes, barcodes, coords_df = _load_slideseq_3d(
+            run["slices"], z_spacing=z_spacing, alignment=alignment)
         outdir = run["method_dirs"]["spark"]
         _write_r_format(counts.T.tocsr(), genes, barcodes, coords_df, outdir)
     else:

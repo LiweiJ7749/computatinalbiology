@@ -116,6 +116,7 @@
     "sample": "Slide_seq_OB2",
     "n_slices": 20,
     "reconstruction": "stack_2d_slices",
+    "z_spacing": 1.0,
     "slices": [
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173945_OB2-Slide01_slide-seqv2_processed.h5ad",
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173946_OB2-Slide02_slide-seqv2_processed.h5ad",

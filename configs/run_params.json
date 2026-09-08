@@ -38,7 +38,8 @@
   },
 
   "Visium_HD_Human_Breast_Cancer": {
-    "spark": { "option": "single" }
+    "spark": { "option": "single" },
+    "bin_factor": 8
   },
 
   "MERFISH_Moffitt": {

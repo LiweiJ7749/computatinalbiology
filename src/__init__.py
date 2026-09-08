@@ -341,6 +341,15 @@ def resolve_run(dataset=None, h5ad=None, spatial=None, outdir=None,
                         f"(nnSVG/SpaGCN/SpaSEG 仅支持 2D)")
         methods = kept
 
+    # --- 数据集级方法排除（如 HPC 上大数据排除 nnSVG） ---
+    exclude = set(reg.get("exclude_methods") or [])
+    if exclude:
+        kept = [m for m in methods if m not in exclude]
+        dropped = [m for m in methods if m in exclude]
+        if dropped:
+            log_message(f"按数据集配置 exclude_methods 排除: {dropped}")
+        methods = kept
+
     # --- spatial / outdir / sample ---
     spatial_path = Path(spatial) if spatial else reg.get("spatial")
     out_root = Path(outdir) if outdir else reg.get(

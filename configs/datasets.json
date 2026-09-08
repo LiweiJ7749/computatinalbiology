@@ -3,104 +3,181 @@
     "h5ad": "data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad",
     "sample": "STARmap_Mouse_Brain",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 930,
+    "n_genes": 996,
+    "scale": "small",
+    "data_present": true
   },
   "Visium_Mouse_Olfactory_Bulb": {
     "h5ad": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb.h5ad",
     "spatial": "data/Visium/Mouse_Olf_Bulb/Visium_Mouse_Olfactory_Bulb_spatial.tar.gz",
     "sample": "Visium_Mouse_Olfactory_Bulb",
     "tech": "Visium",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 1185,
+    "n_genes": 32285,
+    "scale": "small",
+    "data_present": true
   },
   "DLPFC_151507": {
-    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151507.h5ad",
+    "h5ad": "data/Visium/Human_DLPFC/dataset__DLPFC__151507.h5ad",
     "sample": "DLPFC_151507",
     "tech": "DLPFC",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 4226,
+    "n_genes": 33538,
+    "scale": "small",
+    "data_present": true
   },
   "DLPFC_151508": {
-    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151508.h5ad",
+    "h5ad": "data/Visium/Human_DLPFC/dataset__DLPFC__151508.h5ad",
     "sample": "DLPFC_151508",
     "tech": "DLPFC",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 4384,
+    "n_genes": 33538,
+    "scale": "small",
+    "data_present": true
   },
   "DLPFC_151509": {
-    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151509.h5ad",
+    "h5ad": "data/Visium/Human_DLPFC/dataset__DLPFC__151509.h5ad",
     "sample": "DLPFC_151509",
     "tech": "DLPFC",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 4789,
+    "n_genes": 33538,
+    "scale": "small",
+    "data_present": true
   },
   "DLPFC_151510": {
-    "h5ad": "data/10xVisium/Mouse_DLPFC/dataset__DLPFC__151510.h5ad",
+    "h5ad": "data/Visium/Human_DLPFC/dataset__DLPFC__151510.h5ad",
     "sample": "DLPFC_151510",
     "tech": "DLPFC",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 4634,
+    "n_genes": 33538,
+    "scale": "small",
+    "data_present": true
   },
   "MERFISH_Moffitt": {
     "h5ad": "data/MERFISH/GSE113576_Moffitt_and_Bambah-Mukku_et_al_merfish_processed.h5ad",
     "sample": "MERFISH_Moffitt",
     "tech": "MERFISH",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 1027848,
+    "n_genes": 161,
+    "scale": "large",
+    "data_present": true,
+    "exclude_methods": [
+      "nnsvg"
+    ]
   },
   "Visium_HD_Mouse_Kidney": {
     "h5ad": "data/10xVisium/Mouse_Kidney/Visium_HD_Mouse_Kidney.h5ad",
     "sample": "Visium_HD_Mouse_Kidney",
     "tech": "Visium_HD",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 502009,
+    "n_genes": 19336,
+    "scale": "large",
+    "data_present": true,
+    "exclude_methods": [
+      "nnsvg"
+    ]
   },
   "Visium_HD_Human_Breast_Cancer": {
     "h5ad": "data/10xVisium/Human_Breast_Cancer/Visium_HD_Human_Breast_Cancer.h5ad",
     "sample": "Visium_HD_Human_Breast_Cancer",
     "tech": "Visium_HD",
-    "dim": 2
+    "dim": 2,
+    "n_spots": null,
+    "n_genes": null,
+    "scale": "unknown",
+    "data_present": false,
+    "exclude_methods": [
+      "nnsvg"
+    ]
   },
   "STARmap_AD_13m_ctrl_rep1": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-control-replicate_1_data.h5ad",
     "sample": "STARmap_AD_13m_ctrl_rep1",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 8034,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_13m_ctrl_rep2": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-control-replicate_2_data.h5ad",
     "sample": "STARmap_AD_13m_ctrl_rep2",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 9428,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_13m_disease_rep1": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-disease-replicate_1_data.h5ad",
     "sample": "STARmap_AD_13m_disease_rep1",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 10372,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_13m_disease_rep2": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_13months-disease-replicate_2_data.h5ad",
     "sample": "STARmap_AD_13m_disease_rep2",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 9634,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_8m_ctrl_rep1": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-control-replicate_1_data.h5ad",
     "sample": "STARmap_AD_8m_ctrl_rep1",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 8506,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_8m_ctrl_rep2": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-control-replicate_2_data.h5ad",
     "sample": "STARmap_AD_8m_ctrl_rep2",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 9803,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_8m_disease_rep1": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-disease-replicate_1_data.h5ad",
     "sample": "STARmap_AD_8m_disease_rep1",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 8186,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "STARmap_AD_8m_disease_rep2": {
     "h5ad": "data/STARmap/mouse_braoin_Alzheimer/STARmap_Zeng2023Integrative_8months-disease-replicate_2_data.h5ad",
     "sample": "STARmap_AD_8m_disease_rep2",
     "tech": "STARmap",
-    "dim": 2
+    "dim": 2,
+    "n_spots": 8202,
+    "n_genes": 2766,
+    "scale": "medium",
+    "data_present": true
   },
   "Stereo_seq_drosophila": {
     "h5ad": "data/stereo-seq/drosophila/E14-16h_a_count_normal_stereoseq.h5ad",
@@ -108,7 +185,11 @@
     "tech": "Stereo_seq",
     "dim": 3,
     "n_slices": 16,
-    "z_source": "obsm_spatial_col3"
+    "z_source": "obsm_spatial_col3",
+    "n_spots": 15295,
+    "n_genes": 13668,
+    "scale": "medium",
+    "data_present": true
   },
   "Slide_seq_OB2_3D": {
     "dim": 3,
@@ -138,24 +219,40 @@
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173962_OB2-Slide18_slide-seqv2_processed.h5ad",
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173963_OB2-Slide19_slide-seqv2_processed.h5ad",
       "data/Slide-seq/mouse_olf_bulb_slide/GSM5173964_OB2-Slide20_slide-seqv2_processed.h5ad"
-    ]
+    ],
+    "n_spots": 881213,
+    "n_genes": 20479,
+    "scale": "large",
+    "data_present": true
   },
   "zebrafish_3hpf": {
     "h5ad": "data/stereo-seq/zebrafish/zf3_stereoseq.h5ad",
     "sample": "zebrafish_3hpf",
     "tech": "Stereo_seq_zf",
-    "dim": 3
+    "dim": 3,
+    "n_spots": 8055,
+    "n_genes": 17706,
+    "scale": "medium",
+    "data_present": true
   },
   "zebrafish_5hpf": {
     "h5ad": "data/stereo-seq/zebrafish/zf5_stereoseq.h5ad",
     "sample": "zebrafish_5hpf",
     "tech": "Stereo_seq_zf",
-    "dim": 3
+    "dim": 3,
+    "n_spots": 6064,
+    "n_genes": 16153,
+    "scale": "medium",
+    "data_present": true
   },
   "zebrafish_10hpf": {
     "h5ad": "data/stereo-seq/zebrafish/zf10_stereoseq.h5ad",
     "sample": "zebrafish_10hpf",
     "tech": "Stereo_seq_zf",
-    "dim": 3
+    "dim": 3,
+    "n_spots": 19102,
+    "n_genes": 18698,
+    "scale": "medium",
+    "data_present": true
   }
 }

@@ -128,7 +128,9 @@ def null_moran_compare(sig_morans: np.ndarray, all_morans: np.ndarray,
     all_morans: 全基因已算好的 Moran's I 数组（来自 ``moran_geary_table``）。
     max_k: 检出基因数超过该值时随机抽样子集做 null 对比，避免置换次数 x 基因数
            过大导致超大 spot 数据集上数小时~数十小时的白费核时。
-    返回 {median_sig, median_null, mean_null, p_value(单侧, sig>null), n_null, n_sig}。
+    返回 {median_sig, median_null, mean_null, std_null, effect_z, p_value, n_null, n_sig}。
+    其中 effect_z = (median_sig - mean_null)/std_null 为连续效应量：即使所有方法都
+    打满置换次数（p 值饱和在 1/(n_null+1)），effect_z 仍能区分方法。
     """
     rng = np.random.default_rng(seed)
     sig_morans = np.asarray(sig_morans, dtype=np.float64)
@@ -139,6 +141,7 @@ def null_moran_compare(sig_morans: np.ndarray, all_morans: np.ndarray,
     k = len(sig_morans)
     if k == 0:
         return {"median_sig": np.nan, "median_null": np.nan, "mean_null": np.nan,
+                "std_null": np.nan, "effect_z": np.nan,
                 "p_value": np.nan, "n_null": n_null, "n_sig": 0}
     if k > max_k:
         sig_morans = sig_morans[rng.choice(k, size=max_k, replace=False)]
@@ -153,11 +156,40 @@ def null_moran_compare(sig_morans: np.ndarray, all_morans: np.ndarray,
         null_medians[r] = np.median(all_morans[idx])
     null_medians = null_medians[np.isfinite(null_medians)]
     med_sig = float(np.nanmedian(sig_morans))
+    mean_null = float(np.nanmean(null_medians))
+    std_null = float(np.nanstd(null_medians)) if len(null_medians) else np.nan
+    effect_z = (med_sig - mean_null) / std_null \
+        if (std_null is not None and np.isfinite(std_null) and std_null > 0) else np.nan
     p = (1.0 + float(np.sum(null_medians >= med_sig))) / (1.0 + len(null_medians)) \
         if len(null_medians) else np.nan
     return {"median_sig": med_sig, "median_null": float(np.nanmedian(null_medians)),
-            "mean_null": float(np.nanmean(null_medians)), "p_value": p,
-            "n_null": int(len(null_medians)), "n_sig": int(len(sig_morans))}
+            "mean_null": mean_null, "std_null": std_null, "effect_z": effect_z,
+            "p_value": p, "n_null": int(len(null_medians)), "n_sig": int(len(sig_morans))}
+
+
+def signal_quality(expr_mat: np.ndarray, gene_names: Sequence[str],
+                   sig_genes: Sequence[str], min_spots: int = 10) -> dict:
+    """1.9 检出基因的信号质量检查（技术假阳性代理）。
+
+    对方法检出的基因，统计每个基因「有表达的 spot 数」与「平均表达量」。
+    - ``frac_low_spots``：表达 spot 数 < ``min_spots`` 的检出基因占比；高占比说明
+      检出大量几乎不表达的基因，疑似技术假阳性（SPARK 论文补充图的做法）。
+    - ``median_n_spots`` / ``median_mean_expr``：检出基因表达 spot 数 / 平均表达量的中位数。
+
+    expr_mat: (genes x spots) 的 log1p 表达矩阵（行与 gene_names 对齐）。
+    """
+    gidx = {g: i for i, g in enumerate(gene_names)}
+    idx = [gidx[g] for g in sig_genes if g in gidx]
+    if not idx:
+        return {"n_sig": 0, "frac_low_spots": np.nan,
+                "median_n_spots": np.nan, "median_mean_expr": np.nan}
+    sub = expr_mat[np.asarray(idx, dtype=np.int64)]
+    n_spots = (sub > 0).sum(axis=1).astype(np.float64)
+    mean_expr = sub.mean(axis=1)
+    return {"n_sig": int(len(idx)),
+            "frac_low_spots": float((n_spots < min_spots).mean()),
+            "median_n_spots": float(np.median(n_spots)),
+            "median_mean_expr": float(np.median(mean_expr))}
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +282,132 @@ def svg_cluster_ari(expr_log: np.ndarray, gene_names: Sequence[str],
     return {"ari": float(adjusted_rand_score(true_labels, pred)),
             "nmi": float(normalized_mutual_info_score(true_labels, pred)),
             "n_genes_used": len(valid)}
+
+
+def region_discrimination(expr_log: np.ndarray, gene_names: Sequence[str],
+                          top_genes: Sequence[str], labels: Sequence) -> dict:
+    """4.4 解剖结构一致性：检出基因区分标注区域的能力（单基因 η² 的中位数）。
+
+    对每个检出基因，在类别标注 ``labels`` 上计算组间平方和占比 η² =
+    SS_between / SS_total（∈ [0,1]，越大说明该基因表达越能区分区域），再取所有
+    检出基因的中位数。用 η² 而非原始 F 值，好处是取值有界、跨方法可比。
+
+    expr_log: (spots x genes) 的 log1p 表达矩阵（列与 gene_names 对齐）。
+    labels: 每个 spot 的类别标注（与 expr_log 行对齐）。
+    """
+    gidx = {g: i for i, g in enumerate(gene_names)}
+    valid = [g for g in top_genes if g in gidx]
+    if not valid:
+        return {"median_eta2": np.nan, "mean_eta2": np.nan, "n_genes": 0}
+    labels = np.asarray(labels)
+    uniq = np.unique(labels)
+    if len(uniq) < 2:
+        return {"median_eta2": np.nan, "mean_eta2": np.nan, "n_genes": 0}
+
+    X = expr_log[:, [gidx[g] for g in valid]]           # spots x k
+    grand_means = X.mean(axis=0)
+    eta2s = np.empty(X.shape[1])
+    for j in range(X.shape[1]):
+        x = X[:, j]
+        ss_total = float(((x - grand_means[j]) ** 2).sum())
+        if ss_total == 0.0:
+            eta2s[j] = np.nan
+            continue
+        ss_between = 0.0
+        for lab in uniq:
+            mask = labels == lab
+            xg = x[mask]
+            ss_between += float(mask.sum()) * (xg.mean() - grand_means[j]) ** 2
+        eta2s[j] = ss_between / ss_total
+
+    eta2s = eta2s[np.isfinite(eta2s)]
+    if len(eta2s) == 0:
+        return {"median_eta2": np.nan, "mean_eta2": np.nan, "n_genes": len(valid)}
+    return {"median_eta2": float(np.median(eta2s)),
+            "mean_eta2": float(np.mean(eta2s)),
+            "n_genes": int(len(eta2s))}
+
+
+def random_gene_baseline(expr_mat: np.ndarray, gene_names: Sequence[str],
+                         labels, moran_table: pd.DataFrame,
+                         top_k_list: Sequence[int], n_clusters: int,
+                         seed: int = 0, n_draws: int = 10) -> dict:
+    """随机基因基线：随机抽 K 个基因，按与方法同口径计算各项指标，作为对照。
+
+    返回与方法指标同键的 dict，供对比图/表把「Random」当第五个「方法」用：
+      - median_moran_I / median_geary_C_star / null_p / rank_vs_moran_rho /
+        region_eta2 / frac_low_spots 用 K=top_k_list[0] 个随机基因；
+      - ari_top{kk} / nmi_top{kk} 每个 kk 用 kk 个随机基因。
+    多次随机（n_draws）取中位数，降低抽样方差。
+
+    期望结果：random 的 Moran/ARI/η² 明显低于真实方法、null_p≈0.5、ρ≈0。
+    """
+    rng = np.random.default_rng(seed)
+    n_genes = len(gene_names)
+    all_morans = moran_table["moran_I"].to_numpy(np.float64)
+    all_geary_star = moran_table["geary_C_star"].to_numpy(np.float64)
+    k0 = min(int(top_k_list[0]), n_genes)
+    has_labels = labels is not None
+
+    def _med(v):
+        return float(np.nanmedian(np.asarray(v, dtype=np.float64)))
+
+    moran_meds, geary_meds, rho_list, nullp_list, effect_z_list = [], [], [], [], []
+    eta2_list, frac_low_list = [], []
+    median_n_spots_list, median_mean_expr_list = [], []
+    ari_agg = {kk: [] for kk in top_k_list}
+    nmi_agg = {kk: [] for kk in top_k_list}
+
+    for _ in range(n_draws):
+        idx0 = rng.choice(n_genes, size=k0, replace=False)
+        moran_meds.append(_med(all_morans[idx0]))
+        geary_meds.append(_med(all_geary_star[idx0]))
+
+        # 随机名次 vs Moran's I（应≈0）
+        perm = rng.permutation(n_genes).astype(np.float64) + 1.0
+        rho_list.append(spearman_rho(-perm, all_morans))
+
+        # 随机集合 vs 全基因的置换 p（应≈0.5，即不显著）+ 连续效应量
+        _null = null_moran_compare(
+            all_morans[idx0], all_morans, n_null=50,
+            seed=int(rng.integers(0, 2 ** 31)))
+        nullp_list.append(_null["p_value"])
+        effect_z_list.append(_null["effect_z"])
+
+        genes0 = [gene_names[i] for i in idx0]
+        _sq = signal_quality(expr_mat, gene_names, genes0)
+        frac_low_list.append(_sq["frac_low_spots"])
+        median_n_spots_list.append(_sq["median_n_spots"])
+        median_mean_expr_list.append(_sq["median_mean_expr"])
+        if has_labels:
+            eta2_list.append(region_discrimination(
+                expr_mat.T, gene_names, genes0, labels)["median_eta2"])
+
+        for kk in top_k_list:
+            kk_c = min(int(kk), n_genes)
+            idx = rng.choice(n_genes, size=kk_c, replace=False)
+            genes = [gene_names[i] for i in idx]
+            if has_labels:
+                r = svg_cluster_ari(expr_mat.T, gene_names, genes, labels,
+                                    n_clusters=n_clusters, seed=seed)
+                ari_agg[kk].append(r["ari"])
+                nmi_agg[kk].append(r["nmi"])
+
+    out = {
+        "median_moran_I": _med(moran_meds),
+        "median_geary_C_star": _med(geary_meds),
+        "null_p": _med(nullp_list),
+        "rank_vs_moran_rho": _med(rho_list),
+        "moran_effect_z": _med(effect_z_list),
+        "region_eta2": _med(eta2_list) if eta2_list else np.nan,
+        "frac_low_spots": _med(frac_low_list),
+        "median_n_spots": _med(median_n_spots_list),
+        "median_mean_expr": _med(median_mean_expr_list),
+    }
+    for kk in top_k_list:
+        out[f"ari_top{kk}"] = _med(ari_agg[kk]) if ari_agg[kk] else np.nan
+        out[f"nmi_top{kk}"] = _med(nmi_agg[kk]) if nmi_agg[kk] else np.nan
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,21 @@ RANK_CSV_PREFIX = {
     "spaseg": "spaSEG",
 }
 
+# 随机基因基线（对照）：作为一个伪「方法」出现在对比图/表里，用灰色区分。
+RANDOM_BASELINE_KEY = "random"
+RANDOM_BASELINE_COLOR = "#8C8C8C"
+RANDOM_BASELINE_LABEL = "Random"
+
+
+def _method_color(m: str) -> str:
+    """返回方法颜色；随机基线用灰色。"""
+    return src.METHOD_COLORS.get(m, RANDOM_BASELINE_COLOR)
+
+
+def _method_label(m: str) -> str:
+    """返回方法标签；随机基线用 'Random'。"""
+    return src.METHOD_LABELS.get(m, RANDOM_BASELINE_LABEL)
+
 
 # ---------------------------------------------------------------------------
 # 读入与对齐
@@ -200,6 +215,21 @@ def method_metrics(method: str, rank_df: pd.DataFrame, runtime: float,
         "has_scale": False,
     }
 
+    # --- 1.2 / 1.3 p 值校准（QQ λ + KS 均匀性；用全基因 pval 做校准检查）---
+    pvals = rank_df["pval"].to_numpy(np.float64)
+    qq = M.qq_plot_lambda(pvals)
+    ks_p = M.kstest_uniform(pvals)
+
+    # --- 1.9 信号质量检查（技术假阳性代理）---
+    sq = M.signal_quality(expr_mat, gene_names, sig_genes)
+
+    # --- 4.4 解剖结构一致性（仅当有类别标注；用 top-K 基因，K=top_k_list[0]）---
+    rd = None
+    if labels is not None:
+        rd = M.region_discrimination(
+            expr_mat.T, gene_names,
+            rank_df["gene"].head(top_k_list[0]).tolist(), labels)
+
     out = {
         "n_sig": n_sig,
         "n_ranked": n_ranked,
@@ -209,9 +239,17 @@ def method_metrics(method: str, rank_df: pd.DataFrame, runtime: float,
         "null_median_moran_I": null["median_null"],
         "null_mean_moran_I": null["mean_null"],
         "null_p": null["p_value"],
+        "moran_effect_z": null["effect_z"],
         "wall_seconds": runtime,
         "rank_vs_moran_rho": rho,
         "rank_vs_effect_rho": eff_rho,
+        "qq_lambda": qq["lambda"],
+        "ks_uniform_p": ks_p,
+        "frac_low_spots": sq["frac_low_spots"],
+        "median_n_spots": sq["median_n_spots"],
+        "median_mean_expr": sq["median_mean_expr"],
+        "region_eta2": (rd["median_eta2"] if rd is not None else np.nan),
+        "region_eta2_mean": (rd["mean_eta2"] if rd is not None else np.nan),
         "info_flags": info_flags,
     }
 
@@ -324,20 +362,27 @@ def plot_rank_consensus(spearman_mat: pd.DataFrame, jaccard_mat: pd.DataFrame,
 
 
 def plot_n_quality(n_sig: dict, median_moran: dict, null_median: float,
-                   out_path: Path) -> None:
+                   out_path: Path, random_baseline: dict = None,
+                   random_k: int = None) -> None:
     _setup_style()
     fig, ax = plt.subplots(figsize=(5, 4))
     for m in n_sig:
         x = np.log10(max(n_sig[m], 1))
         y = median_moran[m]
-        ax.scatter(x, y, s=70, color=src.METHOD_COLORS[m])
-        ax.annotate(src.METHOD_LABELS[m], (x, y),
+        ax.scatter(x, y, s=70, color=_method_color(m))
+        ax.annotate(_method_label(m), (x, y),
                     textcoords="offset points", xytext=(6, 2), fontsize=9)
     if np.isfinite(null_median):
         ax.axhline(null_median, ls="--", color="gray", lw=1, label="null median")
-        ax.legend(frameon=False)
+    if random_baseline is not None:
+        x = np.log10(max(int(random_k or 1), 1))
+        y = random_baseline.get("median_moran_I", np.nan)
+        if np.isfinite(y):
+            ax.scatter(x, y, s=90, color=RANDOM_BASELINE_COLOR, marker="X",
+                       zorder=5, label="Random")
     ax.set_xlabel("log10(# detected)")
     ax.set_ylabel("Median Moran's I")
+    ax.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -348,10 +393,165 @@ def plot_ari_curve(ari_df: pd.DataFrame, out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(6, 4))
     for m, sub in ari_df.groupby("method"):
         ax.plot(sub["top_k"], sub["ari"], marker="o", ms=4,
-                color=src.METHOD_COLORS[m], label=src.METHOD_LABELS[m])
+                color=_method_color(m), label=_method_label(m))
     ax.set_xlabel("Top-K")
     ax.set_ylabel("ARI")
     ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_ari_nmi_curve(ari_df: pd.DataFrame, out_path: Path) -> None:
+    """下游特征效率曲线：ARI 与 NMI 随 Top-K 变化（双面板折线图，含随机基线）。"""
+    _setup_style()
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharex=True)
+    for ax, metric, label in ((axes[0], "ari", "ARI"),
+                              (axes[1], "nmi", "NMI")):
+        for m, sub in ari_df.groupby("method"):
+            ls = "--" if m == RANDOM_BASELINE_KEY else "-"
+            ax.plot(sub["top_k"], sub[metric], marker="o", ms=4, ls=ls,
+                    color=_method_color(m), label=_method_label(m))
+        ax.set_xlabel("Top-K")
+        ax.set_ylabel(label)
+        ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_qq(rank_dfs: dict, out_path: Path) -> None:
+    """1.2 QQ 图：每方法全基因 p 值的 -log10 分位数 vs 均匀理论分位数。"""
+    _setup_style()
+    methods = list(rank_dfs)
+    fig, axes = plt.subplots(1, len(methods), figsize=(4 * len(methods), 3.5),
+                             sharex=True, sharey=True, squeeze=False)
+    for ax, m in zip(axes[0], methods):
+        p = rank_dfs[m]["pval"].dropna().to_numpy(np.float64)
+        p = p[(p > 0) & (p <= 1)]
+        if len(p) == 0:
+            ax.set_title(src.METHOD_LABELS[m])
+            continue
+        p = np.sort(p)
+        n = len(p)
+        expected = -np.log10((np.arange(1, n + 1) - 0.5) / n)
+        observed = -np.log10(p)
+        lim = max(float(np.nanmax(expected)), float(np.nanmax(observed))) * 1.05
+        ax.scatter(expected, observed, s=6, alpha=0.5,
+                   color=src.METHOD_COLORS[m])
+        ax.plot([0, lim], [0, lim], ls="--", color="gray", lw=1)
+        ax.set_xlim(0, lim)
+        ax.set_ylim(0, lim)
+        ax.set_title(src.METHOD_LABELS[m])
+    axes[0][0].set_xlabel("Expected -log10(p)")
+    axes[0][0].set_ylabel("Observed -log10(p)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _scalar_value(method_results: dict, m: str, key: str, top_k: int) -> float:
+    """从 method_results 取一个标量指标值。"""
+    return method_results[m].get(key, np.nan)
+
+
+def plot_scalar_metrics(method_results: dict, methods: list, top_k: int,
+                        out_path: Path, baseline: dict = None) -> None:
+    """标量指标分组柱状图（每指标一个子图，x=方法，一方法一色，含随机基线）。"""
+    _setup_style()
+    all_methods = list(methods)
+    results = dict(method_results)
+    if baseline is not None:
+        all_methods = all_methods + [RANDOM_BASELINE_KEY]
+        results[RANDOM_BASELINE_KEY] = baseline
+    panels = [
+        ("median_moran_I", "Median Moran's I"),
+        ("median_geary_C_star", "Median Geary C*"),
+        ("moran_effect_z", "Moran effect Z"),
+        ("rank_vs_moran_rho", "Spearman ρ (rank↔Moran)"),
+        (f"ari_top{top_k}", f"ARI @ top-{top_k}"),
+        (f"nmi_top{top_k}", f"NMI @ top-{top_k}"),
+        ("region_eta2", "Region η²"),
+        ("median_n_spots", "Median expr. spots"),
+    ]
+    n = len(panels)
+    ncols = 4
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.1, nrows * 2.6),
+                             squeeze=False)
+    x = np.arange(len(all_methods))
+    for ax, (key, title) in zip(axes.ravel(), panels):
+        vals = [_scalar_value(results, m, key, top_k) for m in all_methods]
+        ax.bar(x, vals, color=[_method_color(m) for m in all_methods])
+        ax.set_xticks(x)
+        ax.set_xticklabels([_method_label(m) for m in all_methods],
+                           rotation=30, ha="right")
+        ax.set_title(title)
+    for ax in axes.ravel()[n:]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _minmax_col(col: np.ndarray) -> np.ndarray:
+    """按列 min-max 归一化到 [0,1]（全 NaN / 全相等时返回 0）。"""
+    col = np.asarray(col, dtype=np.float64)
+    lo, hi = np.nanmin(col), np.nanmax(col)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi == lo:
+        return np.zeros_like(col)
+    return (col - lo) / (hi - lo)
+
+
+def plot_radar(method_results: dict, methods: list, top_k: int,
+               out_path: Path, baseline: dict = None) -> None:
+    """雷达图：把各标量指标按方法 min-max 归一化后叠加对比（越大越靠外，含随机基线）。"""
+    _setup_style()
+    all_methods = list(methods)
+    results = dict(method_results)
+    if baseline is not None:
+        all_methods = all_methods + [RANDOM_BASELINE_KEY]
+        results[RANDOM_BASELINE_KEY] = baseline
+    axes_def = [
+        ("Median Moran's I", "median_moran_I", 1.0),
+        ("Median Geary C*", "median_geary_C_star", 1.0),
+        ("Moran effect Z", "moran_effect_z", 1.0),
+        ("Spearman ρ", "rank_vs_moran_rho", 1.0),
+        (f"ARI@top{top_k}", f"ari_top{top_k}", 1.0),
+        (f"NMI@top{top_k}", f"nmi_top{top_k}", 1.0),
+        ("Region η²", "region_eta2", 1.0),
+        ("Median expr. spots", "median_n_spots", 1.0),
+    ]
+    raw = np.zeros((len(all_methods), len(axes_def)))
+    for i, m in enumerate(all_methods):
+        for j, (_, key, sign) in enumerate(axes_def):
+            v = _scalar_value(results, m, key, top_k)
+            if sign < 0 and np.isfinite(v):
+                v = 1.0 - v
+            raw[i, j] = v
+    norm = np.column_stack([_minmax_col(raw[:, j])
+                            for j in range(len(axes_def))])
+
+    angles = np.linspace(0, 2 * np.pi, len(axes_def), endpoint=False).tolist()
+    angles += angles[:1]
+    fig, ax = plt.subplots(figsize=(6.5, 6.5), subplot_kw=dict(polar=True))
+    for i, m in enumerate(all_methods):
+        vals = norm[i].tolist() + [norm[i, 0]]
+        if m == RANDOM_BASELINE_KEY:
+            ax.plot(angles, vals, color=_method_color(m), lw=2, ls="--",
+                    label=_method_label(m))
+            ax.fill(angles, vals, color=_method_color(m), alpha=0.06)
+        else:
+            ax.plot(angles, vals, color=_method_color(m), lw=2,
+                    label=_method_label(m))
+            ax.fill(angles, vals, color=_method_color(m), alpha=0.12)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels([d[0] for d in axes_def], fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(["0.25", "0.5", "0.75", "1.0"], fontsize=7)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.12), frameon=False)
+    fig.suptitle("Normalized method comparison (min-max across methods)", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -411,6 +611,12 @@ def run_evaluation(args) -> int:
             m, rank_dfs[m], runtimes.get(m, np.nan), expr_mat, W, gene_names,
             moran_table, labels, n_clusters, top_k_list, args.n_null, args.seed)
 
+    # --- 随机基因基线（对照）---
+    baseline = M.random_gene_baseline(
+        expr_mat, gene_names, labels, moran_table, top_k_list,
+        n_clusters=n_clusters, seed=args.seed,
+        n_draws=args.n_baseline_draws)
+
     # --- 一致性（维度 3.5）---
     all_genes = gene_names
     aligned = {m: (df.set_index("gene")["rank"].reindex(all_genes))
@@ -443,7 +649,10 @@ def run_evaluation(args) -> int:
         kendall_w = np.nan
 
     consensus_top_k = 100 if 100 in top_k_list else top_k_list[0]
-    consensus = M.consensus_genes(rank_dfs, min_methods=3, top_k=consensus_top_k)
+    # 共识口径随方法数自适应：4 方法→≥3，3 方法→≥2（避免变成“全交集”口径漂移）
+    consensus_min_methods = max(2, len(methods) - 1)
+    consensus = M.consensus_genes(rank_dfs, min_methods=consensus_min_methods,
+                                  top_k=consensus_top_k)
 
     # --- 写 tables / figures / summary.json ---
     eval_dir = outdir / "eval"
@@ -484,10 +693,11 @@ def run_evaluation(args) -> int:
         "null_median_moran_I": method_results[m]["null_median_moran_I"],
         "null_mean_moran_I": method_results[m]["null_mean_moran_I"],
         "null_p": method_results[m]["null_p"],
+        "moran_effect_z": method_results[m]["moran_effect_z"],
     } for m in methods]
     pd.DataFrame(moran_rows).to_csv(tables_dir / "moran_geary.csv", index=False)
 
-    # 4) ari_curve.csv（仅当有标注）
+    # 4) ari_curve.csv（仅当有标注；含随机基线）
     ari_rows = []
     if has_labels:
         for m in methods:
@@ -497,7 +707,43 @@ def run_evaluation(args) -> int:
                     "ari": method_results[m].get(f"ari_top{k}", np.nan),
                     "nmi": method_results[m].get(f"nmi_top{k}", np.nan),
                 })
+        for k in top_k_list:
+            ari_rows.append({
+                "method": RANDOM_BASELINE_KEY, "top_k": k,
+                "ari": baseline.get(f"ari_top{k}", np.nan),
+                "nmi": baseline.get(f"nmi_top{k}", np.nan),
+            })
     pd.DataFrame(ari_rows).to_csv(tables_dir / "ari_curve.csv", index=False)
+
+    # 5) pval_calibration.csv（1.2 QQ λ + 1.3 KS 均匀性）
+    calib_rows = [{
+        "method": m,
+        "qq_lambda": method_results[m].get("qq_lambda", np.nan),
+        "ks_uniform_p": method_results[m].get("ks_uniform_p", np.nan),
+    } for m in methods]
+    pd.DataFrame(calib_rows).to_csv(tables_dir / "pval_calibration.csv", index=False)
+
+    # 6) signal_quality.csv（1.9 信号质量检查）
+    sq_rows = [{
+        "method": m,
+        "n_sig": method_results[m].get("n_sig", np.nan),
+        "frac_low_spots": method_results[m].get("frac_low_spots", np.nan),
+        "median_n_spots": method_results[m].get("median_n_spots", np.nan),
+        "median_mean_expr": method_results[m].get("median_mean_expr", np.nan),
+    } for m in methods]
+    pd.DataFrame(sq_rows).to_csv(tables_dir / "signal_quality.csv", index=False)
+
+    # 7) region_discrimination.csv（4.4 解剖结构一致性 η²）
+    rd_rows = [{
+        "method": m,
+        "median_eta2": method_results[m].get("region_eta2", np.nan),
+        "mean_eta2": method_results[m].get("region_eta2_mean", np.nan),
+    } for m in methods]
+    pd.DataFrame(rd_rows).to_csv(tables_dir / "region_discrimination.csv", index=False)
+
+    # 8) random_baseline.csv（随机基因基线对照，长表 metric/value）
+    rand_rows = [{"metric": k, "value": v} for k, v in baseline.items()]
+    pd.DataFrame(rand_rows).to_csv(tables_dir / "random_baseline.csv", index=False)
 
     # --- 绘图（--no-figures 时跳过）---
     if not args.no_figures:
@@ -505,6 +751,7 @@ def run_evaluation(args) -> int:
         try:
             plot_pval_hist(rank_dfs, figures_dir / "pval_hist.png")
             plot_sig_ratio_curve(rank_dfs, figures_dir / "sig_ratio_curve.png")
+            plot_qq(rank_dfs, figures_dir / "qq.png")
             plot_effect_size_corr(rank_dfs, moran_table,
                                   figures_dir / "effect_size_corr.png")
             if len(methods) >= 2:
@@ -514,10 +761,18 @@ def run_evaluation(args) -> int:
                 [method_results[m]["null_median_moran_I"] for m in methods]))
             plot_n_quality({m: method_results[m]["n_sig"] for m in methods},
                            {m: method_results[m]["median_moran_I"] for m in methods},
-                           null_median, figures_dir / "n_quality.png")
+                           null_median, figures_dir / "n_quality.png",
+                           random_baseline=baseline, random_k=top_k_list[0])
+            plot_scalar_metrics(method_results, methods, top_k_list[0],
+                                figures_dir / "scalar_comparison.png",
+                                baseline=baseline)
+            if len(methods) >= 2:
+                plot_radar(method_results, methods, top_k_list[0],
+                           figures_dir / "radar.png", baseline=baseline)
             if has_labels and ari_rows:
-                plot_ari_curve(pd.DataFrame(ari_rows),
-                               figures_dir / "ari_curve.png")
+                ari_df = pd.DataFrame(ari_rows)
+                plot_ari_curve(ari_df, figures_dir / "ari_curve.png")
+                plot_ari_nmi_curve(ari_df, figures_dir / "ari_nmi_curve.png")
         except Exception as e:
             src.log_message(f"绘图失败（不影响表与 summary）: {e}")
 
@@ -536,12 +791,21 @@ def run_evaluation(args) -> int:
                 "median_moran_I": method_results[m]["median_moran_I"],
                 "null_p": method_results[m]["null_p"],
                 "median_geary_C_star": method_results[m]["median_geary_C_star"],
+                "moran_effect_z": method_results[m]["moran_effect_z"],
                 "wall_seconds": method_results[m]["wall_seconds"],
                 "rank_vs_moran_rho": method_results[m]["rank_vs_moran_rho"],
                 "rank_vs_effect_rho": method_results[m]["rank_vs_effect_rho"],
+                "qq_lambda": method_results[m]["qq_lambda"],
+                "ks_uniform_p": method_results[m]["ks_uniform_p"],
+                "frac_low_spots": method_results[m]["frac_low_spots"],
+                "median_n_spots": method_results[m]["median_n_spots"],
+                "median_mean_expr": method_results[m]["median_mean_expr"],
+                "region_eta2": method_results[m]["region_eta2"],
+                "region_eta2_mean": method_results[m]["region_eta2_mean"],
                 "info_flags": method_results[m]["info_flags"],
             } for m in methods
         },
+        "random_baseline": baseline,
         "consistency": {
             "spearman_matrix": {
                 a: {b: spearman_mat.loc[a, b] for b in methods} for a in methods
@@ -614,6 +878,8 @@ def main():
     ap.add_argument("--knn", type=int, default=6, help="Moran's I 近邻数（默认 6）")
     ap.add_argument("--n-null", type=int, default=200,
                     help="随机对照置换次数（默认 200）")
+    ap.add_argument("--n-baseline-draws", type=int, default=10,
+                    help="随机基因基线抽样次数（默认 10）")
     ap.add_argument("--top-k-list", default="100,500,1000",
                     help="一致性/下游用的 top-K 列表（逗号分隔）")
     ap.add_argument("--seed", type=int, default=0, help="随机种子（默认 0）")

@@ -43,6 +43,12 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Patch
 
+# matplotlib 内部调用新版 pyparsing 的 deprecated API 产生的 DeprecationWarning 噪音，
+# 与本项目无关，统一忽略。
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning,
+                        message=r".*deprecated - use .*")
+
 # ---------------------------------------------------------------------------
 # 项目路径 & 引入 src 初始化模块
 # ---------------------------------------------------------------------------

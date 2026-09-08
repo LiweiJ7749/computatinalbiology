@@ -28,6 +28,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
+# matplotlib 内部调用新版 pyparsing 的 deprecated API（parseString/resetCache/
+# enablePackrat）会产生大量与本项目无关的 DeprecationWarning，统一忽略。
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning,
+                        message=r".*deprecated - use .*")
+
 # ---------------------------------------------------------------------------
 # 项目路径 & 引入 src 初始化模块（import 无副作用、开销低）
 # ---------------------------------------------------------------------------
@@ -551,7 +557,7 @@ def plot_radar(method_results: dict, methods: list, top_k: int,
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
     ax.set_yticklabels(["0.25", "0.5", "0.75", "1.0"], fontsize=7)
     ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.12), frameon=False)
-    fig.suptitle("Normalized method comparison (min-max across methods)", fontsize=12)
+    fig.suptitle("Normalized comparison (fraction of best method)", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

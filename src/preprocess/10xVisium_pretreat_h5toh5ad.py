@@ -12,6 +12,8 @@ SVG 检测方法对比使用。
       bin_size=8 -> 8um bin，bin_size=16 -> 16um bin。
     - 仅保留组织内 bin（masks/square_XXXum）。
     - spatial.tar.gz 里的 H&E 图像提取后存入 adata.uns['spatial'] 供可视化。
+    - 逐基因聚合相互独立，支持多进程并行（--n-jobs），以榨取多核 CPU；
+      内存占用主要与 16um 下的非零元总数相关，bin_size=16 约为 8um 的 1/4。
 
 依赖（envs/spatial 已装）：h5py / numpy / scipy / scanpy / matplotlib。
 
@@ -20,12 +22,14 @@ SVG 检测方法对比使用。
         ./data/10xVisium/Human_Breast_Cancer/Visium_HD_11mm_Human_Breast_Cancer_feature_slice.h5 \\
         ./data/10xVisium/Human_Breast_Cancer/Visium_HD_11mm_Human_Breast_Cancer_spatial.tar.gz \\
         ./data/10xVisium/Human_Breast_Cancer/Visium_HD_Human_Breast_Cancer.h5ad \\
-        [--bin-size 16]
+        [--bin-size 16] [--n-jobs 24]
 """
 import argparse
+import os
 import sys
 import tarfile
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import h5py
@@ -36,7 +40,79 @@ from scipy.sparse import csr_matrix
 import anndata as ad
 
 
-def build_adata(h5_path: Path, bin_size: int) -> ad.AnnData:
+# ---------------------------------------------------------------------------
+# 逐基因聚合（供单进程与多进程 worker 复用）
+# ---------------------------------------------------------------------------
+def _process_gene(fs, key: str, bf: int, max_r: int, max_c: int,
+                  grid: np.ndarray, n_bins: int):
+    """把单个基因的 2um 像素 UMI 聚合到 bin，返回 (cols, vals)（CSR 一行的非零列/值）。"""
+    g = fs[key]
+    rr = g["row"][:] // bf
+    cc = g["col"][:] // bf
+    keep = (rr <= max_r) & (cc <= max_c)
+    rr = rr[keep]
+    cc = cc[keep]
+    if len(rr) == 0:
+        return np.empty(0, np.int32), np.empty(0, np.float32)
+    colidx = grid[rr, cc]
+    good = colidx >= 0
+    if not good.any():
+        return np.empty(0, np.int32), np.empty(0, np.float32)
+    data = g["data"][:][keep][good].astype(np.float32)
+    counts = np.bincount(colidx[good], weights=data, minlength=n_bins)
+    nz = np.nonzero(counts)[0]
+    return nz.astype(np.int32), counts[nz].astype(np.float32)
+
+
+def _aggregate_serial(h5_path, gene_keys, bf, max_r, max_c, grid, n_bins):
+    cols_all, vals_all = [], []
+    with h5py.File(h5_path, "r") as f:
+        fs = f["feature_slices"]
+        for key in gene_keys:
+            c, v = _process_gene(fs, key, bf, max_r, max_c, grid, n_bins)
+            cols_all.append(c)
+            vals_all.append(v)
+    return cols_all, vals_all
+
+
+# 多进程 worker 的模块级上下文（每个 worker 进程打开自己的 h5py 只读句柄）
+_WORKER_CTX = None
+
+
+def _init_worker(h5_path, bf, max_r, max_c, grid, n_bins):
+    global _WORKER_CTX
+    _WORKER_CTX = (str(h5_path), int(bf), int(max_r), int(max_c),
+                   grid, int(n_bins))
+
+
+def _run_chunk(gene_keys):
+    h5_path, bf, max_r, max_c, grid, n_bins = _WORKER_CTX
+    cols_all, vals_all = [], []
+    with h5py.File(h5_path, "r") as f:
+        fs = f["feature_slices"]
+        for key in gene_keys:
+            c, v = _process_gene(fs, key, bf, max_r, max_c, grid, n_bins)
+            cols_all.append(c)
+            vals_all.append(v)
+    return cols_all, vals_all
+
+
+def _aggregate_parallel(h5_path, gene_keys, bf, max_r, max_c, grid, n_bins,
+                        n_jobs):
+    n = len(gene_keys)
+    n_jobs = max(1, min(int(n_jobs), n))
+    chunk_size = (n + n_jobs - 1) // n_jobs
+    chunks = [gene_keys[i:i + chunk_size] for i in range(0, n, chunk_size)]
+    with ProcessPoolExecutor(
+            max_workers=n_jobs, initializer=_init_worker,
+            initargs=(h5_path, bf, max_r, max_c, grid, n_bins)) as ex:
+        results = list(ex.map(_run_chunk, chunks))
+    cols_all = [c for cols, _ in results for c in cols]
+    vals_all = [v for _, vals in results for v in vals]
+    return cols_all, vals_all
+
+
+def build_adata(h5_path: Path, bin_size: int, n_jobs: int = 1) -> ad.AnnData:
     bf = bin_size // 2  # 2um 像素 -> bin 的除数
     bin_key = f"square_{bin_size:03d}um"
 
@@ -63,33 +139,17 @@ def build_adata(h5_path: Path, bin_size: int) -> ad.AnnData:
         n_bins = len(pairs)
         max_r, max_c = grid.shape[0] - 1, grid.shape[1] - 1
 
-        # ---- 逐基因聚合 UMI 到 bin ----
-        fs = f["feature_slices"]
-        gene_keys = sorted(fs.keys(), key=int)
-        gene_idx = np.array([int(k) for k in gene_keys], dtype=np.int64)
+        gene_keys = sorted(f["feature_slices"].keys(), key=int)
 
-        cols_all, vals_all = [], []
-        for key in gene_keys:
-            g = fs[key]
-            rr = g["row"][:] // bf
-            cc = g["col"][:] // bf
-            keep = (rr <= max_r) & (cc <= max_c)
-            rr, cc = rr[keep], cc[keep]
-            if len(rr) == 0:
-                cols_all.append(np.empty(0, np.int32))
-                vals_all.append(np.empty(0, np.float32))
-                continue
-            colidx = grid[rr, cc]
-            good = colidx >= 0
-            if not good.any():
-                cols_all.append(np.empty(0, np.int32))
-                vals_all.append(np.empty(0, np.float32))
-                continue
-            data = g["data"][:][keep][good].astype(np.float32)
-            counts = np.bincount(colidx[good], weights=data, minlength=n_bins)
-            nz = np.nonzero(counts)[0]
-            cols_all.append(nz.astype(np.int32))
-            vals_all.append(counts[nz].astype(np.float32))
+    gene_idx = np.array([int(k) for k in gene_keys], dtype=np.int64)
+
+    # ---- 逐基因聚合 UMI 到 bin（单进程或多进程） ----
+    if n_jobs > 1 and len(gene_keys) > n_jobs:
+        cols_all, vals_all = _aggregate_parallel(
+            h5_path, gene_keys, bf, max_r, max_c, grid, n_bins, n_jobs)
+    else:
+        cols_all, vals_all = _aggregate_serial(
+            h5_path, gene_keys, bf, max_r, max_c, grid, n_bins)
 
     # ---- 组装 CSR（行=基因，列=bin），再转置为 bins x genes ----
     indptr = np.zeros(len(gene_keys) + 1, dtype=np.int64)
@@ -151,7 +211,10 @@ def main():
     ap.add_argument("spatial_tgz", help="spatial.tar.gz 路径")
     ap.add_argument("output", help="输出 h5ad 路径")
     ap.add_argument("--bin-size", type=int, default=8, choices=[8, 16],
-                    help="bin 大小（um），默认 8")
+                    help="bin 大小（um），默认 8；大数据集用 16 控制规模")
+    ap.add_argument("--n-jobs", type=int,
+                    default=(os.cpu_count() or 1),
+                    help="并行进程数（默认=CPU 核数；1=单进程）")
     args = ap.parse_args()
 
     h5 = Path(args.h5)
@@ -159,8 +222,8 @@ def main():
         print(f"ERROR: 找不到 {h5}")
         sys.exit(1)
 
-    print(f"读取 {h5.name}（bin_size={args.bin_size}um）...")
-    adata = build_adata(h5, args.bin_size)
+    print(f"读取 {h5.name}（bin_size={args.bin_size}um, n_jobs={args.n_jobs}）...")
+    adata = build_adata(h5, args.bin_size, args.n_jobs)
 
     tgz = Path(args.spatial_tgz)
     if tgz.exists():

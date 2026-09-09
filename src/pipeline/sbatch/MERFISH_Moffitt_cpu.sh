@@ -17,6 +17,10 @@ cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH
 export SVG_PYTHON=$HOME/svg_methods/envs/spatial/bin/python
 export SVG_RSCRIPT=$HOME/svg_methods/envs/spatial_R/bin/Rscript
+# 让单进程多线程方法（SpaSEG/SpaGCN 的 torch、scanpy/BLAS）用满分配的 CPU，避免退化为单核
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
+export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
+export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
 
 bash src/pipeline/models_benchmark.sh \
   --dataset MERFISH_Moffitt \

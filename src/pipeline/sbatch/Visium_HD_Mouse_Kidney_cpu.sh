@@ -2,7 +2,8 @@
 #SBATCH --job-name=hd_kidney_cpu
 #SBATCH --partition=7542-64C-512G
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
 #SBATCH --time=24:00:00
 #SBATCH -o hd_kidney_cpu.%j.out
 #SBATCH -e hd_kidney_cpu.%j.err

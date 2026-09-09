@@ -127,6 +127,34 @@ def _pick_device(arg: str) -> str:
     return dev
 
 
+def _set_cpu_threads() -> int:
+    """按作业分配的 CPU 数设置 PyTorch 线程，避免 CPU 训练退化为单核。
+
+    优先读 SLURM_CPUS_PER_TASK / OMP_NUM_THREADS，其次回退 os.cpu_count()。
+    只影响 torch 的 intra-op 并行（Conv2d/BatchNorm 等），不影响结果。
+    """
+    import os
+
+    import torch
+
+    n_threads = None
+    for key in ("SLURM_CPUS_PER_TASK", "OMP_NUM_THREADS"):
+        val = os.environ.get(key)
+        if val:
+            try:
+                n_threads = int(val)
+            except ValueError:
+                n_threads = None
+            if n_threads and n_threads > 0:
+                break
+    if not n_threads:
+        n_threads = os.cpu_count() or 1
+    torch.set_num_threads(n_threads)
+    src.log_message(f"CPU 线程数 = {n_threads} "
+                    f"(torch.get_num_threads={torch.get_num_threads()})")
+    return n_threads
+
+
 # ---------------------------------------------------------------------------
 # 1) 读取 + 预处理
 # ---------------------------------------------------------------------------
@@ -452,6 +480,8 @@ def main():
     src.log_header(f"SpaSEG: {args.sample or args.dataset or 'unknown'}")
     h5ad_in, outdir, sample, params = _resolve_inputs(args)
     device = _pick_device(args.device)
+    if device == "cpu":
+        _set_cpu_threads()
 
     # 1) 读取
     adata = load_data(h5ad_in)

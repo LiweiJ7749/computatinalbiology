@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=bc_cpu
-#SBATCH --partition=7542-64C-512G
+#SBATCH --partition=6126-24C-768G
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
+#SBATCH --ntasks-per-node=24
 #SBATCH --time=24:00:00
 #SBATCH -o bc_cpu.%j.out
 #SBATCH -e bc_cpu.%j.err
@@ -11,7 +11,7 @@
 # - 方法 spark,spagcn,spaseg（nnSVG 由 datasets.json 的 exclude_methods 排除）
 # - 前置：先跑 Visium_HD_Human_Breast_Cancer_convert.sh 生成 16um h5ad
 # - SPARK-X 全分辨率（投影核 single）；SpaGCN 按 bin_factor=8 聚合成 ~7k meta-spot
-# - eval 末尾自动执行；X.toarray 约 71GB，配合 512G 节点可控（注意峰值内存）
+# - eval 末尾自动执行；X.toarray 约 71GB，配合 768G 节点可控（注意峰值内存）
 set -euo pipefail
 cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH

@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=merfish_cpu
-#SBATCH --partition=7542-64C-512G
+#SBATCH --partition=6126-24C-768G
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
+#SBATCH --ntasks-per-node=24
 #SBATCH --time=24:00:00
 #SBATCH -o merfish_cpu.%j.out
 #SBATCH -e merfish_cpu.%j.err

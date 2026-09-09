@@ -106,9 +106,6 @@ def load_and_prepare(h5ad_in: Path, device: str):
         coords = np.asarray(adata.obsm["spatial"], dtype=float)
         adata.obs["x"] = coords[:, 0]
         adata.obs["y"] = coords[:, 1]
-    x_array = adata.obs["x"].astype(float).tolist()
-    y_array = adata.obs["y"].astype(float).tolist()
-
     # X 统一为真实 counts（若存在 raw_count 层），再做单次 normalize+log1p
     if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
         adata.X = adata.layers["raw_count"].copy()
@@ -122,6 +119,12 @@ def load_and_prepare(h5ad_in: Path, device: str):
     sc.pp.normalize_per_cell(adata)
     sc.pp.log1p(adata)
     src.log_message(f"预处理后 shape = {adata.shape}")
+
+    # 关键：必须在 prefilter 之后才取 x/y 坐标，保证与最终 adata 的 spot 数一致。
+    # 若在 prefilter 之前取，prefilter 移除 spot（如空 bin）后邻接矩阵维度会与
+    # adata 不匹配，触发 search_res -> clf.train 里的 assert adata.shape[0]==adj.shape[0] 失败。
+    x_array = adata.obs["x"].astype(float).tolist()
+    y_array = adata.obs["y"].astype(float).tolist()
     return adata, x_array, y_array, device
 
 

@@ -110,6 +110,8 @@ def load_and_prepare(h5ad_in: Path, device: str, tech: str = ""):
     # Stereo-seq→raw_counts，Stereo_seq_zf→counts，Visium/DLPFC→X），再做单次 normalize+log1p。
     # 不能硬编码 raw_count，否则 Stereo-seq/zebrafish 会拿已归一化 X 再归一化一次。
     adata.X = src._raw_counts_matrix(adata, tech=tech)
+    # normalize_per_cell 要求浮点矩阵：raw counts 是 int64，原地 /= 会触发 casting 错误
+    adata.X = adata.X.astype(np.float32)
     src.log_message("X <- 真实 counts（按 tech 从 raw 层取）")
 
     src.log_step(2, 6, "预处理（prefilter + normalize + log1p）")
@@ -151,7 +153,7 @@ def _infer_n_clusters(adata):
     的 n_clusters，缺省 9），并打印提示让用户用 --n-clusters 覆盖。
     """
     for col in ("clusters", "cell_type", "leiden", "louvain", "celltype", "domain",
-                "seurat_clusters", "bin_annotation"):
+                "annotation", "seurat_clusters", "bin_annotation"):
         if col in adata.obs.columns and adata.obs[col].notna().any() \
                 and adata.obs[col].nunique() > 1:
             n = int(adata.obs[col].nunique())

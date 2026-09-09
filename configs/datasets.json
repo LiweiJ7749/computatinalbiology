@@ -191,6 +191,18 @@
     "scale": "medium",
     "data_present": true
   },
+  "Stereo_seq_drosophila_test": {
+    "h5ad": "data/stereo-seq/drosophila/E14-16h_a_count_normal_stereoseq_test.h5ad",
+    "sample": "Stereo_seq_drosophila_test",
+    "tech": "Stereo_seq",
+    "dim": 3,
+    "n_slices": 4,
+    "z_source": "obsm_spatial_col3",
+    "n_spots": 3457,
+    "n_genes": 13668,
+    "scale": "small",
+    "data_present": true
+  },
   "Slide_seq_OB2_3D": {
     "dim": 3,
     "tech": "Slide_seq",

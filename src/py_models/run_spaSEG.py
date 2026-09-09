@@ -190,6 +190,8 @@ def preprocess(adata, params):
         if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
             adata.X = adata.layers["raw_count"].copy()
             src.log_message("X <- layers['raw_count']（真实 counts）")
+        # 统一转浮点：raw counts 可能是 int64，normalize_total 对 int64 会报 casting 错误
+        adata.X = adata.X.astype(np.float32)
         # 去除全零基因/spot：其 normalize_total 会 0/0 产生 NaN，同样会让 PCA 报错
         sc.pp.filter_genes(adata, min_counts=1)
         sc.pp.filter_cells(adata, min_counts=1)

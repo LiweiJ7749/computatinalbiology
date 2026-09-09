@@ -154,10 +154,12 @@ def load_expr_and_coords(run: dict, knn: int):
 
     gene_names = list(adata.var.index.astype(str))
 
-    # 类别标注（维度 4）
+    # 类别标注（维度 4）。DLPFC 的标注在 obs['sce.layer_guess']（皮层分层 Layer1~6/WM），
+    # 故把它也纳入探测，否则 ARI/NMI/Region η² 这类下游指标会因无标注而缺失。
     labels = None
     label_col = None
-    for col in ("clusters", "cell_type", "leiden"):
+    for col in ("clusters", "cell_type", "leiden",
+                "sce.layer_guess", "layer_guess"):
         if col in adata.obs.columns and adata.obs[col].notna().any():
             labels = adata.obs[col].iloc[spot_idx].astype(str).tolist()
             label_col = col

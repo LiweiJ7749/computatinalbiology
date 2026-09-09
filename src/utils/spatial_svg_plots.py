@@ -11,7 +11,8 @@
   2. 同基因同色：``gene_color(gene)`` 基于基因名做确定性 hash -> HSV，全模块所有图
      复用，保证同一 SVG 在任意方法、任意图里颜色一致。
   3. 非交互：matplotlib Agg 后端，纯 PNG，适合 Linux/HPC。
-  4. 2D 数据；3D（Stereo-seq/Slide-seq，仅 SPARK-X）暂不绘制（留待后续按切片投影）。
+  4. 2D 数据绘制 2D 空间散点系列图；3D 数据（Stereo-seq/Slide-seq）绘制
+     3D 散点（top_expr_3d）与逐切片 2D 网格（slice_grid）。
 
 产出（默认写到 ``<outdir>/eval/figures/spatial/``）：
   top_expr_<sample>.png       每方法 Top-N 基因空间表达小图矩阵（Cell 绿色系）
@@ -166,6 +167,14 @@ def _subsample(coords, expr_mat, max_spots, seed: int):
     return coords[idx], expr_mat[:, idx]
 
 
+def _subsample_indices(n: int, max_spots: int, seed: int) -> np.ndarray:
+    """返回用于绘图的 spot 下标（超过 max_spots 时随机下采样）。"""
+    if n <= max_spots:
+        return np.arange(n)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n, size=max_spots, replace=False))
+
+
 # ---------------------------------------------------------------------------
 # 数据装载
 # ---------------------------------------------------------------------------
@@ -192,8 +201,8 @@ def _load_data(run: dict, methods: list, args):
     if not methods:
         return None, None, None, None, None, None
 
-    expr_mat, W, gene_names, coords, _labels, _label_col = load_expr_and_coords(
-        run, args.knn)
+    expr_mat, W, gene_names, coords, _labels, _label_col, _slice_ids, _w_def = \
+        load_expr_and_coords(run, args.knn, args.w_def)
 
     # 下采样后需用新坐标重建 W（Moran / 平滑都依赖 W）
     coords, expr_mat = _subsample(coords, expr_mat, args.max_spots, args.seed)
@@ -510,16 +519,176 @@ def plot_unique_genes(methods, top_genes, expr_mat, coords, gene_names,
 
 
 # ---------------------------------------------------------------------------
+# 3D 空间可视化：3D 散点 + 逐切片 2D 网格
+# ---------------------------------------------------------------------------
+def _ordered_slice_ids(slice_ids):
+    """按首次出现顺序返回唯一切片 id 列表。"""
+    if slice_ids is None:
+        return None
+    seen = []
+    for s in slice_ids:
+        if s not in seen:
+            seen.append(s)
+    return seen
+
+
+def _load_data_3d(run: dict, methods: list, args):
+    """读 3D rank CSV 与统一表达/坐标，返回 (rank_dfs, top_genes, expr_mat, coords, slice_ids, gene_names)。"""
+    sample = run["sample"]
+    rank_dfs, top_genes = {}, {}
+    for m in methods:
+        csv_path = run["method_dirs"][m] / f"SVG_{RANK_CSV_PREFIX[m]}_{sample}_rank.csv"
+        if csv_path.exists():
+            df = read_rank_csv(csv_path)
+            rank_dfs[m] = df
+            top_genes[m] = df["gene"].head(args.top_n).tolist()
+        else:
+            src.log_message(f"缺少排名 CSV，跳过 {src.METHOD_LABELS[m]}: {csv_path}")
+
+    methods = [m for m in methods if m in rank_dfs]
+    if not methods:
+        return None
+
+    expr_mat, _W, gene_names, coords, _labels, _label_col, slice_ids, _w_def = \
+        load_expr_and_coords(run, args.knn, args.w_def)
+    idx = _subsample_indices(coords.shape[0], args.max_spots, args.seed)
+    if len(idx) < coords.shape[0]:
+        src.log_message(f"spot 数 {coords.shape[0]} 超过 --max-spots={args.max_spots}，"
+                        f"下采样到 {len(idx)} 个 spot 用于绘图")
+    coords = coords[idx]
+    expr_mat = expr_mat[:, idx]
+    if slice_ids is not None:
+        slice_ids = [slice_ids[i] for i in idx]
+    return rank_dfs, top_genes, expr_mat, coords, slice_ids, gene_names
+
+
+def plot_top_expr_3d(methods, top_genes, expr_mat, coords, gene_names,
+                     out_path: Path, s: float):
+    """每方法 Top-N 基因的 3D 空间散点（行=方法，列=基因，x/y/z 三维坐标着色）。"""
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+    gidx = _gene_index(gene_names)
+    top_n = max((len(top_genes[m]) for m in methods), default=0)
+    if top_n == 0:
+        return
+    fig, axes = plt.subplots(len(methods), top_n,
+                             figsize=(top_n * 2.6, len(methods) * 2.8),
+                             subplot_kw={"projection": "3d"}, squeeze=False)
+    for r, m in enumerate(methods):
+        genes = top_genes[m][:top_n]
+        for c in range(top_n):
+            ax = axes[r, c]
+            if c < len(genes) and genes[c] in gidx:
+                v = _robust_scale(expr_mat[gidx[genes[c]]])
+                ax.scatter(coords[:, 0], coords[:, 1], coords[:, 2], c=v,
+                           cmap=CMAP_CONT, s=max(s / 4.0, 0.5), linewidths=0,
+                           rasterized=True, depthshade=False)
+                ax.set_title(genes[c], fontsize=8, style="italic",
+                             color=gene_color(genes[c]))
+            else:
+                ax.set_title("N/A", fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_zticks([])
+        pos = axes[r, 0].get_position()
+        yc = (pos.y0 + pos.y1) / 2
+        fig.text(0.01, yc, src.METHOD_LABELS[m], fontsize=10, va="center",
+                 rotation=90, ha="center")
+    fig.suptitle("Top SVG 3D spatial expression (per method)", fontsize=12)
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.94, bottom=0.04,
+                        wspace=0.10, hspace=0.22)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    src.log_message(f"已生成 3D Top 空间表达图: {out_path}")
+
+
+def plot_slice_grid_3d(methods, top_genes, expr_mat, coords, slice_ids,
+                       gene_names, out_dir: Path, sample: str, s: float,
+                       max_slices: int):
+    """每方法 Top-N 基因的逐切片 2D 表达网格（行=基因，列=切片）。"""
+    gidx = _gene_index(gene_names)
+    if slice_ids is None:
+        src.log_message("无切片归属（slice_ids=None），跳过逐切片 2D 网格")
+        return
+    slice_order = _ordered_slice_ids(slice_ids)
+    if max_slices and max_slices > 0 and len(slice_order) > max_slices:
+        pick = np.unique(np.linspace(0, len(slice_order) - 1, max_slices)
+                         .round().astype(int))
+        slice_order = [slice_order[i] for i in pick[:max_slices]]
+
+    for m in methods:
+        genes = [g for g in top_genes[m] if g in gidx]
+        if not genes:
+            continue
+        fig, axes = plt.subplots(len(genes), len(slice_order),
+                                 figsize=(len(slice_order) * 1.7, len(genes) * 1.7),
+                                 squeeze=False)
+        for r, g in enumerate(genes):
+            e = expr_mat[gidx[g]]
+            v = _robust_scale(e)
+            for c, sid in enumerate(slice_order):
+                ax = axes[r, c]
+                mask = np.array([s_ == sid for s_ in slice_ids])
+                if mask.any():
+                    _draw_spatial(ax, coords[mask][:, :2], v[mask], CMAP_CONT, s=s)
+                else:
+                    _blank_cell(ax)
+                if r == 0:
+                    ax.set_title(str(sid), fontsize=8)
+            axes[r, 0].set_ylabel(g, fontsize=8, style="italic",
+                                  color=gene_color(g), rotation=0,
+                                  ha="right", va="center")
+        fig.suptitle(f"Per-slice spatial expression — {src.METHOD_LABELS[m]}",
+                     fontsize=11)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        out = out_dir / f"slice_grid_{sample}_{m}.png"
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        src.log_message(f"已生成逐切片 2D 网格: {out}")
+
+
+def run_spatial_plots_3d(run: dict, args) -> int:
+    """3D 数据集的空间 SVG 可视化（3D 散点 + 逐切片 2D 网格）。"""
+    methods = run["methods"]
+    out_dir = run["outdir"] / "eval" / "figures" / "spatial"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sample = run["sample"]
+
+    src.log_header(f"3D 空间 SVG 可视化: {sample}")
+    loaded = _load_data_3d(run, methods, args)
+    if loaded is None:
+        src.log_message("未找到任何排名 CSV，无法绘制 3D 空间图")
+        return 1
+    rank_dfs, top_genes, expr_mat, coords, slice_ids, gene_names = loaded
+    methods = [m for m in methods if m in rank_dfs]
+    src.log_message(f"方法: {[src.METHOD_LABELS[m] for m in methods]} "
+                    f"| spots={coords.shape[0]} | genes={len(gene_names)}")
+
+    fig_sel = set((args.figures or "all").replace(",", " ").split())
+    do = lambda name: ("all" in fig_sel) or (name in fig_sel)
+    s = args.point_size
+
+    if do("top_expr_3d"):
+        plot_top_expr_3d(methods, top_genes, expr_mat, coords, gene_names,
+                         out_dir / f"top_expr_3d_{sample}.png", s)
+    if do("slice_grid"):
+        plot_slice_grid_3d(methods, top_genes, expr_mat, coords, slice_ids,
+                           gene_names, out_dir, sample, s, args.max_slices)
+
+    src.log_message(f"3D 空间可视化产物目录: {out_dir}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # 主编排 + CLI
 # ---------------------------------------------------------------------------
 def run_spatial_plots(args) -> int:
     methods = _parse_methods(args.methods)
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
-                          sample=args.sample, methods=methods)
+                          sample=args.sample, methods=methods, eval3d=True)
     if int(run.get("dim") or 2) == 3:
-        src.log_message("3D 空间 SVG 可视化暂未实现，跳过（仅 SPARK-X 支持 3D）")
-        return 0
+        return run_spatial_plots_3d(run, args)
 
     methods = run["methods"]
     out_dir = run["outdir"] / "eval" / "figures" / "spatial"
@@ -574,11 +743,15 @@ def main():
     ap.add_argument("--methods", default=None, help="方法子集（逗号分隔，默认全部）")
     ap.add_argument("--top-n", type=int, default=6, help="每方法取前 N 个 SVG（默认 6）")
     ap.add_argument("--knn", type=int, default=6, help="空间近邻数（默认 6）")
+    ap.add_argument("--w-def", default="auto", choices=["auto", "iso", "slice"],
+                    help="空间权重定义（auto=3D+有切片用 slice，否则 iso；默认 auto）")
     ap.add_argument("--figures", default="all",
-                    help="要画的图，逗号分隔：top_expr,dominant,cross_method,pattern,overlap"
-                         "（默认 all）")
+                    help="要画的图，逗号分隔。2D：top_expr,dominant,cross_method,"
+                         "pattern,overlap；3D：top_expr_3d,slice_grid（默认 all）")
     ap.add_argument("--max-spots", type=int, default=300000,
                     help="散点图 spot 上限，超过则随机下采样（默认 300000）")
+    ap.add_argument("--max-slices", type=int, default=20,
+                    help="3D 逐切片网格最多展示的切片数，超过则均匀抽片（默认 20）")
     ap.add_argument("--matrix-max-genes", type=int, default=12,
                     help="跨方法矩阵最多展示的基因列数（默认 12）")
     ap.add_argument("--point-size", type=float, default=8.0,

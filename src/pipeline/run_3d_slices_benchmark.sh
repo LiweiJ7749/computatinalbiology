@@ -9,8 +9,12 @@
 #   1) export_3d_slices.py  逐切片导出 2D 输入
 #   2) 逐切片运行现有 2D 脚本（SpaGCN / SpaSEG）
 #   3) merge_slices.py      用保守口径（p 值中位数）把逐切片 *_rank.csv 合并为单一排名
+#   4) evaluation.py + spatial_svg_plots.py  3D 评估（SPARK-X 原生 + 合并后的 2D 方法）与可视化
 #
 # （nnSVG 因逐切片 BRISC 运行过慢，已从 3D 逐切片方案中移除。）
+#
+# HPC 逐切片 job array：用 --slice-idx N + --skip-merge 让每个数组任务只跑一片，
+# 导出（--skip-export 复用）与合并/评估单独成批提交。
 #
 # 用法（项目根）：
 #   bash src/pipeline/run_3d_slices_benchmark.sh --dataset Slide_seq_OB2_3D
@@ -25,6 +29,10 @@ SAMPLE_ARG=""
 METHODS_ARG=""
 DEVICE="auto"
 SKIP_EXPORT=0
+SKIP_SLICES=0
+SLICE_IDX=""
+SKIP_MERGE=0
+SKIP_EVAL=0
 
 usage() {
   cat <<'EOF' >&2
@@ -36,6 +44,10 @@ usage() {
   --methods LIST       逗号分隔 2D 方法子集（默认 spagcn,spaseg）
   --device DEV         python 模型设备（auto/cuda/cpu）
   --skip-export        跳过逐切片导出（要求已生成）
+  --skip-slices        跳过逐切片运行（仅做合并/评估）
+  --slice-idx N        只运行第 N 片（HPC 逐切片 job array 用，隐式跳过合并）
+  --skip-merge         跳过跨切片合并（逐切片 job array 用）
+  --skip-eval          跳过末端的 3D 评估与空间可视化
 EOF
 }
 
@@ -48,6 +60,10 @@ while [ $# -gt 0 ]; do
     --methods) METHODS_ARG="${2:-}"; shift 2 ;;
     --device)  DEVICE="${2:-}"; shift 2 ;;
     --skip-export) SKIP_EXPORT=1; shift ;;
+    --skip-slices) SKIP_SLICES=1; shift ;;
+    --slice-idx) SLICE_IDX="${2:-}"; shift 2 ;;
+    --skip-merge) SKIP_MERGE=1; shift ;;
+    --skip-eval)   SKIP_EVAL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[错误] 未知参数: $1" >&2; usage; exit 1 ;;
   esac
@@ -142,33 +158,55 @@ for d in "${ref_dirs[@]}"; do
   slice_ids+=("$(basename "$d" | sed 's/^S//')")
 done
 log_msg "切片数 = ${#slice_ids[@]}"
+if [ -n "$SLICE_IDX" ]; then
+  slice_ids=("$SLICE_IDX")
+  log_msg "仅运行切片 S$SLICE_IDX（--slice-idx，隐式跳过合并）"
+fi
 
 # ---------------- 2) 逐切片运行 + 合并 ----------------
 for m in $METHODS; do
   subdir="$(subdir_of "$m")"
-  log_header "步骤 2/3: 逐切片运行 $m"
-  for i in "${slice_ids[@]}"; do
-    slice_root="$OUTDIR/$subdir/slices/S$i"
-    sample_slice="${SAMPLE}_S${i}"
-    case "$m" in
-      spagcn)
-        "$PYTHON" "$ROOT/src/py_models/run_spaGCN.py" \
-          --h5ad "$slice_root/spaGCN/${sample_slice}_spaGCN.h5ad" --outdir "$slice_root" \
-          --sample "$sample_slice" --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spagcn_S${i}.log"
-        ;;
-      spaseg)
-        "$PYTHON" "$ROOT/src/py_models/run_spaSEG.py" \
-          --h5ad "$slice_root/spaSEG/${sample_slice}_spaSEG.h5ad" --outdir "$slice_root" \
-          --sample "$sample_slice" --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spaseg_S${i}.log"
-        ;;
-    esac
-  done
+  if [ "$SKIP_SLICES" -eq 0 ]; then
+    log_header "步骤 2/3: 逐切片运行 $m"
+    for i in "${slice_ids[@]}"; do
+      slice_root="$OUTDIR/$subdir/slices/S$i"
+      sample_slice="${SAMPLE}_S${i}"
+      case "$m" in
+        spagcn)
+          "$PYTHON" "$ROOT/src/py_models/run_spaGCN.py" \
+            --h5ad "$slice_root/spaGCN/${sample_slice}_spaGCN.h5ad" --outdir "$slice_root" \
+            --sample "$sample_slice" --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spagcn_S${i}.log"
+          ;;
+        spaseg)
+          "$PYTHON" "$ROOT/src/py_models/run_spaSEG.py" \
+            --h5ad "$slice_root/spaSEG/${sample_slice}_spaSEG.h5ad" --outdir "$slice_root" \
+            --sample "$sample_slice" --device "$DEVICE" 2>&1 | tee -a "$OUTDIR/logs/spaseg_S${i}.log"
+          ;;
+      esac
+    done
+  fi
 
-  log_header "步骤 3/3: 合并 $m 切片排名 (merge_slices.py)"
-  "$PYTHON" "$ROOT/src/py_models/merge_slices.py" \
-    --method "$m" --method-dir "$OUTDIR/$subdir" --sample "$SAMPLE" \
-    2>&1 | tee -a "$OUTDIR/logs/merge_${m}.log"
+  if [ -z "$SLICE_IDX" ] && [ "$SKIP_MERGE" -eq 0 ]; then
+    log_header "步骤 3/3: 合并 $m 切片排名 (merge_slices.py)"
+    "$PYTHON" "$ROOT/src/py_models/merge_slices.py" \
+      --method "$m" --method-dir "$OUTDIR/$subdir" --sample "$SAMPLE" \
+      2>&1 | tee -a "$OUTDIR/logs/merge_${m}.log"
+  fi
 done
+
+# ---------------- 3) 3D 评估（SPARK-X 原生 + 合并后的 SpaGCN/SpaSEG） + 空间可视化 ----------------
+if [ -z "$SLICE_IDX" ] && [ "$SKIP_MERGE" -eq 0 ] && [ "$SKIP_EVAL" -eq 0 ]; then
+  log_header "步骤 4: 3D 评估 (evaluation.py) + 空间可视化 (spatial_svg_plots.py)"
+  EVAL_METHODS="spark,spagcn,spaseg"
+  "$PYTHON" "$ROOT/src/utils/evaluation.py" --dataset "$DATASET" --outdir "$OUTDIR" \
+    --sample "$SAMPLE" --methods "$EVAL_METHODS" \
+    2>&1 | tee -a "$OUTDIR/logs/evaluation.log" || \
+    log_msg "[警告] evaluation.py 返回非零"
+  "$PYTHON" "$ROOT/src/utils/spatial_svg_plots.py" --dataset "$DATASET" --outdir "$OUTDIR" \
+    --sample "$SAMPLE" --methods "$EVAL_METHODS" \
+    2>&1 | tee -a "$OUTDIR/logs/spatial_svg.log" || \
+    log_msg "[警告] spatial_svg_plots.py 返回非零"
+fi
 
 log_header "run_3d_slices_benchmark 完成"
 echo "结果目录: $OUTDIR"

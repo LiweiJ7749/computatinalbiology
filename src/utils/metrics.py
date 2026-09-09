@@ -55,6 +55,69 @@ def knn_weights(coords: np.ndarray, k: int = 6) -> "sparse.csr_matrix":
     return W
 
 
+def spatial_weights(coords: np.ndarray, k: int = 6, w_def: str = "auto",
+                    slice_ids: Optional[Sequence] = None):
+    """构造空间权重 W，并返回 ``(W, w_def_label)``。
+
+    coords: (n, d) 空间坐标；d=2 平面，d=3 三维（z 需为物理单位 µm）。
+    w_def 取值：
+      - "iso"  : 直接在完整坐标上做 k 近邻（2D 或 3D kNN），用于 Stereo-seq 真 3D；
+      - "slice": 逐切片 2D kNN 块对角（不建立跨切片边），用于 Slide-seq 未配准期；
+      - "auto" : 提供 slice_ids 且 coords 为 3D 时用 "slice"，否则 "iso"。
+    slice_ids: 每个 spot 的切片归属（长度 n），仅 "slice" 分支使用。
+
+    返回 (W, label)，label ∈ {"iso_2d","iso_3d","slice"}，写入 summary 以追溯口径。
+    """
+    from scipy import sparse as sp
+
+    coords = np.asarray(coords, dtype=np.float64)
+    n, d = coords.shape
+    use_slice = (w_def == "slice") or (
+        w_def == "auto" and slice_ids is not None and d > 2)
+
+    if use_slice and slice_ids is not None:
+        slice_ids = np.asarray(slice_ids)
+        blocks = []
+        for sid in pd.unique(slice_ids):
+            idx = np.where(slice_ids == sid)[0]
+            if len(idx) < 2:
+                continue
+            sub = coords[idx, :2]                     # 切片内 2D 坐标
+            Wsub = knn_weights(sub, k=k)
+            gi, gj = Wsub.nonzero()
+            blocks.append(sp.coo_matrix(
+                (np.ones(len(gi), dtype=np.float64),
+                 (idx[gi], idx[gj])), shape=(n, n)))
+        W = (sum(blocks).tocsr() if blocks else sp.csr_matrix((n, n)))
+        W = (W + W.T).astype(bool).astype(np.float64)
+        W.setdiag(0)
+        W.eliminate_zeros()
+        return W, "slice"
+
+    W = knn_weights(coords, k=k)
+    return W, f"iso_{d}d"
+
+
+def _dense_row(mat, i: int) -> np.ndarray:
+    """取 (genes x spots) 矩阵第 i 行，返回稠密 1D numpy（兼容稀疏/稠密）。"""
+    from scipy import sparse
+    if sparse.issparse(mat):
+        return np.asarray(mat[i, :].toarray(), dtype=np.float64).ravel()
+    return np.asarray(mat[i], dtype=np.float64)
+
+
+def _dense_subset(mat, rows=None, cols=None) -> np.ndarray:
+    """取矩阵子集并稠密化。rows/cols 为整数索引列表或 None。"""
+    from scipy import sparse
+    if rows is not None:
+        mat = mat[rows, :]
+    if cols is not None:
+        mat = mat[:, cols]
+    if sparse.issparse(mat):
+        return mat.toarray()
+    return np.asarray(mat, dtype=np.float64)
+
+
 def _z(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float64)
     return x - x.mean()
@@ -111,7 +174,7 @@ def moran_geary_table(expr_mat: np.ndarray, gene_names: Sequence[str],
     rows = []
     genes = []
     for g, name in enumerate(gene_names):
-        x = expr_mat[g]
+        x = _dense_row(expr_mat, g)
         mi = morans_i(x, W)
         gc = gearys_c(x, W)
         genes.append(name)
@@ -183,7 +246,7 @@ def signal_quality(expr_mat: np.ndarray, gene_names: Sequence[str],
     if not idx:
         return {"n_sig": 0, "frac_low_spots": np.nan,
                 "median_n_spots": np.nan, "median_mean_expr": np.nan}
-    sub = expr_mat[np.asarray(idx, dtype=np.int64)]
+    sub = _dense_subset(expr_mat, rows=np.asarray(idx, dtype=np.int64))
     n_spots = (sub > 0).sum(axis=1).astype(np.float64)
     mean_expr = sub.mean(axis=1)
     return {"n_sig": int(len(idx)),
@@ -269,7 +332,7 @@ def svg_cluster_ari(expr_log: np.ndarray, gene_names: Sequence[str],
     if len(valid) == 0:
         return {"ari": np.nan, "nmi": np.nan, "n_genes_used": 0}
     idx = [list(gene_names).index(g) for g in valid]
-    X = expr_log[:, idx]
+    X = _dense_subset(expr_log, cols=idx)
     # 标准化到零均值单位方差（PCA 前）
     mu, sd = X.mean(axis=0), X.std(axis=0)
     sd[sd == 0] = 1.0
@@ -304,7 +367,7 @@ def region_discrimination(expr_log: np.ndarray, gene_names: Sequence[str],
     if len(uniq) < 2:
         return {"median_eta2": np.nan, "mean_eta2": np.nan, "n_genes": 0}
 
-    X = expr_log[:, [gidx[g] for g in valid]]           # spots x k
+    X = _dense_subset(expr_log, cols=[gidx[g] for g in valid])   # spots x k
     grand_means = X.mean(axis=0)
     eta2s = np.empty(X.shape[1])
     for j in range(X.shape[1]):

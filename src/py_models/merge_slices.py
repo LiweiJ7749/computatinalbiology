@@ -7,7 +7,9 @@
     相比 Fisher（-2Σln p 会因相邻切片相关而高估显著性），中位数不假设切片独立、稳健。
   - 为避免“只在极少数切片被测到”的基因误导排名，默认要求至少 min_tested 片被测到才参与合并
     （否则视为无法跨切片整合，不进入排名）。
-  - 合并后对保留基因做 BH 校正，输出列与统一排名 CSV 一致：gene,stat,pval,padj,rank。
+  - 合并后对保留基因做 BH 校正，输出列与统一排名 CSV 一致：gene,stat,pval,padj,rank，
+    并额外附带跨切片整合质量列：n_tested（被测切片数）、r_g（被测切片中 padj<α 比例）、
+    median_stat（被测切片 stat 中位数）。
 
 用法（项目根，envs/spatial 的 python）：
   python src/py_models/merge_slices.py --method spagcn --method-dir results/local_results/zebrafish_3hpf/spaGCN --sample zebrafish_3hpf --min-tested 2
@@ -55,7 +57,7 @@ def _bh_correct(pvals: np.ndarray) -> np.ndarray:
 
 
 def merge(method_dir: Path, method: str, sample: str, out: Path = None,
-          min_tested: int = 2):
+          min_tested: int = 2, alpha: float = 0.05):
     paths = _find_slice_csvs(method_dir, method, sample)
     src.log_message(f"合并 {len(paths)} 个切片: {[p.name for p in paths]}")
 
@@ -64,12 +66,22 @@ def merge(method_dir: Path, method: str, sample: str, out: Path = None,
     for p in paths:
         df = pd.read_csv(p, dtype={"gene": str})
         smap = {}
-        for gene, pval, padj in zip(df["gene"], df.get("pval", [None] * len(df)),
-                                    df.get("padj", [None] * len(df))):
+        pval_col = "pval" if "pval" in df.columns else "padj"
+        padj_col = "padj" if "padj" in df.columns else pval_col
+        stat_col = "stat" if "stat" in df.columns else None
+        for gene, pval, padj in zip(df["gene"], df[pval_col], df[padj_col]):
             g = str(gene)
             p = pval if pd.notna(pval) else padj
             if pd.notna(p) and 0 < p <= 1:
-                smap[g] = float(p)
+                smap[g] = {
+                    "pval": float(p),
+                    "padj": float(padj) if pd.notna(padj) else float(p),
+                }
+        if stat_col is not None:
+            for gene, stat in zip(df["gene"], df[stat_col]):
+                g = str(gene)
+                if g in smap and pd.notna(stat):
+                    smap[g]["stat"] = float(stat)
         slice_maps.append(smap)
         all_genes.update(smap.keys())
 
@@ -78,11 +90,23 @@ def merge(method_dir: Path, method: str, sample: str, out: Path = None,
 
     merged_p = {}
     tested_n = {}
+    det_rate = {}
+    median_stat = {}
     for g in genes:
-        ps = [sm[g] for sm in slice_maps if g in sm]
-        tested_n[g] = len(ps)
+        entries = [sm[g] for sm in slice_maps if g in sm]
+        tested_n[g] = len(entries)
         # 仅对被测到的切片取中位数；不足 min_tested 片不进入排名
-        merged_p[g] = float(np.median(ps)) if len(ps) >= min_tested else np.nan
+        merged_p[g] = float(np.median([e["pval"] for e in entries])) \
+            if len(entries) >= min_tested else np.nan
+        # 可复现性：在“被测到的切片”里显著（padj < alpha）的比例
+        if entries:
+            det_rate[g] = float(np.mean([e["padj"] < alpha for e in entries]))
+            stats = [e.get("stat", -np.log10(max(e["pval"], 1e-300)))
+                     for e in entries]
+            median_stat[g] = float(np.median(stats))
+        else:
+            det_rate[g] = np.nan
+            median_stat[g] = np.nan
 
     keep = [g for g in genes if tested_n[g] >= min_tested]
     dropped = len(genes) - len(keep)
@@ -99,6 +123,9 @@ def merge(method_dir: Path, method: str, sample: str, out: Path = None,
         "pval": p_arr,
         "padj": padj,
         "rank": 0,
+        "n_tested": [tested_n[g] for g in g_arr],
+        "r_g": [det_rate[g] for g in g_arr],
+        "median_stat": [median_stat[g] for g in g_arr],
     })
     res = res.sort_values(["padj", "pval", "gene"]).reset_index(drop=True)
     res["rank"] = res.index + 1
@@ -123,12 +150,15 @@ def main():
     ap.add_argument("--sample", required=True, help="样本标签（不含 _S<i> 后缀）")
     ap.add_argument("--min-tested", type=int, default=2,
                     help="至少被测到的切片数（默认 2）")
+    ap.add_argument("--alpha", type=float, default=0.05,
+                    help="r_g 检出率用的显著性阈值（默认 0.05）")
     ap.add_argument("--out", default=None, help="合并输出 CSV（默认 <method-dir>/SVG_<METHOD>_<sample>_rank.csv）")
     args = ap.parse_args()
 
     src.log_header(f"合并切片排名: {args.method} / {args.sample}")
     merge(Path(args.method_dir), args.method, args.sample,
-          Path(args.out) if args.out else None, min_tested=args.min_tested)
+          Path(args.out) if args.out else None, min_tested=args.min_tested,
+          alpha=args.alpha)
     src.log_message("合并完成", section="完成")
 
 

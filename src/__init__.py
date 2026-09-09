@@ -59,15 +59,26 @@ METHOD_SUBDIRS = {"spark": "SPARK_X", "nnsvg": "nnSVG",
                   "spagcn": "spaGCN", "spaseg": "spaSEG"}
 ALL_METHODS = ["spark", "nnsvg", "spagcn", "spaseg"]   # 标准执行顺序
 
-# 3D 支持矩阵：目前仅 SPARK-X（locus 为 n x d）支持 3D SVG 检测；
-# nnSVG(受限于 BRISC ncol==2)、SpaGCN(2D 邻接)、SpaSEG(2D 网格 CNN) 均为 2D。
+# 3D 支持矩阵（分三个口径，见 docs/3d_svg_detection.md）：
+#   - METHODS_3D       : 原生 3D 方法（运行期）。仅 SPARK-X（locus 为 n x d）支持 3D SVG；
+#     nnSVG(受限于 BRISC ncol==2)、SpaGCN(2D 邻接)、SpaSEG(2D 网格 CNN) 均为 2D 底层假设。
+#   - METHODS_3D_SLICE : 逐切片 2D 检测 + 跨切片合并的方法（SpaGCN / SpaSEG；nnSVG 逐切片
+#     BRISC 太慢被移除）。
+#   - METHODS_3D_EVAL  : 3D 评价时“可比方法”的并集（原生 3D + 合并后的 2D 方法）。
 METHODS_3D = ["spark"]
+METHODS_3D_SLICE = ["spagcn", "spaseg"]
+METHODS_3D_EVAL = ["spark", "spagcn", "spaseg"]
 
 
-def supported_methods(dim) -> list:
-    """按空间维度返回可用方法子集（dim=3 时仅 SPARK-X）。"""
+def supported_methods(dim, context="run") -> list:
+    """按空间维度返回可用方法子集。
+
+    dim=2 -> 全部四方法；dim=3 时：
+      - context="run" : 原生 3D 方法（仅 SPARK-X）。
+      - context="eval": 3D 可比方法并集（SPARK-X + 逐切片合并后的 SpaGCN/SpaSEG）。
+    """
     if int(dim or 2) == 3:
-        return list(METHODS_3D)
+        return list(METHODS_3D_EVAL if context == "eval" else METHODS_3D)
     return list(ALL_METHODS)
 
 MODEL_SCRIPTS = {
@@ -300,13 +311,17 @@ def _resolve_data_path(p):
 
 
 def resolve_run(dataset=None, h5ad=None, spatial=None, outdir=None,
-                sample=None, tech=None, methods=None) -> dict:
+                sample=None, tech=None, methods=None, eval3d=False) -> dict:
     """把一个 run 的意图归一成唯一的配置字典。
 
     参数可混用：命中 ``dataset`` 注册表后，显式传入的 h5ad/spatial/outdir/sample/
     tech 会覆盖注册表默认值。返回字典字段：
       dataset / h5ad / spatial / outdir / sample / tech / dim / methods /
       method_dirs（3D 数据集额外含 slices / n_slices / reconstruction / z_source）
+
+    ``eval3d``：3D 评价场景置 True。dim=3 时默认（运行期）只保留原生 3D 方法
+    （SPARK-X）；评价场景需同时比较逐切片合并后的 SpaGCN/SpaSEG，故保留
+    ``METHODS_3D_EVAL``（spark + spagcn + spaseg）。
     """
     methods = list(methods or ALL_METHODS)
     bad = [m for m in methods if m not in METHOD_SUBDIRS]
@@ -332,13 +347,14 @@ def resolve_run(dataset=None, h5ad=None, spatial=None, outdir=None,
     if h5ad_path is not None:
         h5ad_path = Path(h5ad_path)
 
-    # --- 3D 方法过滤（仅 SPARK-X 支持 3D） ---
+    # --- 3D 方法过滤（运行期仅 SPARK-X；评价场景含逐切片合并后的 SpaGCN/SpaSEG） ---
     if dim == 3:
-        kept = [m for m in methods if m in supported_methods(3)]
-        skipped = [m for m in methods if m not in supported_methods(3)]
+        allowed = METHODS_3D_EVAL if eval3d else METHODS_3D
+        kept = [m for m in methods if m in allowed]
+        skipped = [m for m in methods if m not in allowed]
         if skipped:
-            log_message(f"dim=3：仅支持 3D 方法 {kept}，跳过 2D 方法 {skipped} "
-                        f"(nnSVG/SpaGCN/SpaSEG 仅支持 2D)")
+            log_message(f"dim=3：仅支持 3D 方法 {allowed}，跳过 {skipped} "
+                        f"(nnSVG/SpaGCN/SpaSEG 仅 2D 原生，SpaGCN/SpaSEG 走逐切片合并)")
         methods = kept
 
     # --- 数据集级方法排除（如 HPC 上大数据排除 nnSVG） ---

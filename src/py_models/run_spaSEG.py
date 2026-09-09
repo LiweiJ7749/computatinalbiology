@@ -175,11 +175,21 @@ def preprocess(adata, params):
     """表达 PCA + 构造 SpaSEG 所需的整数网格坐标 array_row/array_col。"""
     src.log_step(2, 6, "预处理（PCA 特征 + 坐标网格化）")
 
-    # 2.1 表达特征：X 已是 log1p+normalize，直接 PCA 作为 SpaSEG 的输入表达
+    # 2.1 表达特征：与 SpaGCN 一致，优先用真实 counts（raw_count 层），再做
+    # normalize + log1p 得到 log 归一化表达，最后 PCA。MERFISH 的 X 是含 NaN 的
+    # ndarray（PCA 不接受），必须改用干净的 counts 才能继续。
     compons = params["pca_dim"]
     if "X_pca" not in adata.obsm:
         import scanpy as sc
 
+        if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
+            adata.X = adata.layers["raw_count"].copy()
+            src.log_message("X <- layers['raw_count']（真实 counts）")
+        # 去除全零基因/spot：其 normalize_total 会 0/0 产生 NaN，同样会让 PCA 报错
+        sc.pp.filter_genes(adata, min_counts=1)
+        sc.pp.filter_cells(adata, min_counts=1)
+        sc.pp.normalize_total(adata, target_sum=1e4)
+        sc.pp.log1p(adata)
         sc.pp.pca(adata, n_comps=compons, random_state=0)
     else:
         adata.obsm["X_pca"] = adata.obsm["X_pca"][:, :compons]

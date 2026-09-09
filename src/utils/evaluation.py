@@ -113,62 +113,110 @@ def read_runtime(path: Path) -> float:
         return np.nan
 
 
-def load_expr_and_coords(run: dict, knn: int):
-    """读 h5ad，构建 (log1p 归一化表达矩阵, 空间权重 W, 基因名, 坐标, 标注)。
+def _norm_log1p(X):
+    """把 (spots x genes) 计数矩阵做 library-size normalize(1e4) + log1p，返回 (genes x spots) csr。
 
-    返回 ``(expr_mat, W, gene_names, coords, labels)``：
-      - expr_mat: (genes x spots) 的 library-size normalize + log1p；
-      - W: k 近邻二元对称权重 (n x n)；
-      - labels: obs 中的类别标注（无则 None）。
+    X 可为稀疏或稠密；全程保持稀疏（log1p(0)=0，仅非零元变化）。
     """
-    import anndata as ad
     from scipy import sparse
 
-    h5ad_path = run["h5ad"]
-    if not h5ad_path.exists():
-        raise FileNotFoundError(f"h5ad 不存在: {h5ad_path}")
-    src.log_message(f"读取 h5ad: {h5ad_path}")
-    adata = ad.read_h5ad(h5ad_path)
-    src.log_message(f"shape = {adata.shape} (spots x genes)")
-
-    coords_df = src.load_coords(adata, run.get("spatial"))
-    keep = [b for b in adata.obs.index if b in coords_df.index]
-    coords = coords_df.loc[keep, ["x", "y"]].to_numpy(dtype=np.float64)
-    src.log_message(f"对齐坐标后 spots = {len(keep)}")
-
-    # 表达矩阵：优先 raw_count 层（真实 counts），做 library-size normalize + log1p
-    if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
-        X = adata.layers["raw_count"]
+    if not sparse.issparse(X):
+        X = sparse.csr_matrix(X, dtype=np.float64)
     else:
-        X = adata.X
-    if sparse.issparse(X):
-        X = X.toarray()
-    else:
-        X = np.asarray(X, dtype=np.float64)
-    spot_idx = [i for i, b in enumerate(adata.obs.index) if b in coords_df.index]
-    X = X[spot_idx, :]
-    totals = X.sum(axis=1)
+        X = X.astype(np.float64).tocsr()
+    totals = np.asarray(X.sum(axis=1)).ravel()
     totals[totals == 0] = 1.0
-    expr_log = np.log1p(X / totals[:, None] * 1e4)          # spots x genes
-    expr_mat = expr_log.T                                    # genes x spots
+    X_norm = (sparse.diags(1e4 / totals) @ X).tocsr()
+    X_norm.data = np.log1p(X_norm.data)
+    return X_norm.T.tocsr()                              # genes x spots
 
-    gene_names = list(adata.var.index.astype(str))
 
-    # 类别标注（维度 4）。DLPFC 的标注在 obs['sce.layer_guess']（皮层分层 Layer1~6/WM），
-    # 故把它也纳入探测，否则 ARI/NMI/Region η² 这类下游指标会因无标注而缺失。
-    labels = None
-    label_col = None
-    for col in ("clusters", "cell_type", "leiden",
-                "sce.layer_guess", "layer_guess"):
-        if col in adata.obs.columns and adata.obs[col].notna().any():
-            labels = adata.obs[col].iloc[spot_idx].astype(str).tolist()
-            label_col = col
-            src.log_message(f"发现类别标注列: obs['{col}']")
-            break
+def _load_slideseq_unified(run: dict):
+    """Slide-seq 多切片（无单一 h5ad）重建统一 3D 表达/坐标，供评价复用。
 
-    W = M.knn_weights(coords, k=knn)
-    del adata
-    return expr_mat, W, gene_names, coords, labels, label_col
+    返回 ``(expr_mat, gene_names, coords, slice_ids)``：
+      - expr_mat: (genes x spots) 稀疏 csr（library-size normalize + log1p）；
+      - coords: (n, 3) 其中 z = 切片序号 * z_spacing（简单堆叠）；
+      - slice_ids: 每 spot 的切片归属（z 唯一值，供 slice W_def）。
+    """
+    counts, genes, _barcodes, coords_df = src._load_slideseq_3d(
+        run["slices"], z_spacing=float(run.get("z_spacing") or 1.0),
+        alignment=run.get("alignment"))
+    coords = coords_df[["x", "y", "z"]].to_numpy(dtype=np.float64)
+    expr_mat = _norm_log1p(counts)
+    slice_ids = [str(v) for v in coords[:, 2].tolist()]
+    return expr_mat, genes, coords, slice_ids
+
+
+def load_expr_and_coords(run: dict, knn: int, w_def: str = "auto"):
+    """读 h5ad（或 Slide-seq 多切片）构建 (稀疏 log1p 表达, 空间权重 W, 基因名, 坐标, 标注, ...)。
+
+    返回 ``(expr_mat, W, gene_names, coords, labels, label_col, slice_ids, w_def_label)``：
+      - expr_mat: (genes x spots) 稀疏 csr（library-size normalize + log1p，不稠密化）；
+      - W: 空间权重（``metrics.spatial_weights``，dim-aware，w_def ∈ auto/iso/slice）；
+      - coords: (n, d)，d=2 或 3（3D 时含 z 物理坐标）；
+      - slice_ids: 每 spot 切片归属（Stereo-seq 取 obs['slice_ID']/['slice']；
+        Slide-seq 由 z 推导；否则 None）。
+    """
+    h5ad_path = run["h5ad"]
+    dim = int(run.get("dim") or 2)
+
+    if h5ad_path is None:
+        # Slide-seq 多切片无单一 h5ad：从 slices 重建统一表达/坐标
+        if not run.get("slices"):
+            raise FileNotFoundError("h5ad 不存在且无 slices（Slide-seq 多切片）")
+        src.log_message("Slide-seq 多切片：重建统一 3D 表达/坐标")
+        expr_mat, gene_names, coords, slice_ids = _load_slideseq_unified(run)
+        labels = None
+        label_col = None
+    else:
+        import anndata as ad
+
+        if not h5ad_path.exists():
+            raise FileNotFoundError(f"h5ad 不存在: {h5ad_path}")
+        src.log_message(f"读取 h5ad: {h5ad_path}")
+        adata = ad.read_h5ad(h5ad_path)
+        src.log_message(f"shape = {adata.shape} (spots x genes)")
+
+        coords_df = src.load_coords(adata, run.get("spatial"), tech=run.get("tech"),
+                                    h5ad_path=h5ad_path, dim=dim)
+        keep = [b for b in adata.obs.index if b in coords_df.index]
+        coord_cols = ["x", "y"] if dim == 2 else ["x", "y", "z"]
+        coords = coords_df.loc[keep, coord_cols].to_numpy(dtype=np.float64)
+        src.log_message(f"对齐坐标后 spots = {len(keep)}（dim={dim}, coord={coord_cols}）")
+
+        # 表达矩阵：优先 raw_count 层（真实 counts），library-size normalize + log1p（保持稀疏）
+        if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
+            X = adata.layers["raw_count"]
+        else:
+            X = adata.X
+        spot_idx = [i for i, b in enumerate(adata.obs.index) if b in coords_df.index]
+        expr_mat = _norm_log1p(X[spot_idx, :])
+        gene_names = list(adata.var.index.astype(str))
+
+        # 切片归属（3D 数据用于 slice W_def）
+        slice_ids = None
+        for col in ("slice_ID", "slice"):
+            if col in adata.obs.columns:
+                slice_ids = adata.obs[col].iloc[spot_idx].astype(str).tolist()
+                break
+
+        # 类别标注（维度 4）。DLPFC 的标注在 obs['sce.layer_guess']（皮层分层 Layer1~6/WM），
+        # 故把它也纳入探测，否则 ARI/NMI/Region η² 这类下游指标会因无标注而缺失。
+        labels = None
+        label_col = None
+        for col in ("clusters", "cell_type", "leiden",
+                    "sce.layer_guess", "layer_guess"):
+            if col in adata.obs.columns and adata.obs[col].notna().any():
+                labels = adata.obs[col].iloc[spot_idx].astype(str).tolist()
+                label_col = col
+                src.log_message(f"发现类别标注列: obs['{col}']")
+                break
+        del adata
+
+    W, w_def_label = M.spatial_weights(coords, k=knn, w_def=w_def, slice_ids=slice_ids)
+    src.log_message(f"空间权重 W = {w_def_label}（k={knn}）")
+    return expr_mat, W, gene_names, coords, labels, label_col, slice_ids, w_def_label
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +622,7 @@ def run_evaluation(args) -> int:
 
     run = src.resolve_run(dataset=args.dataset, h5ad=args.h5ad,
                           spatial=args.spatial, outdir=args.outdir,
-                          sample=args.sample, methods=methods)
+                          sample=args.sample, methods=methods, eval3d=True)
     outdir = run["outdir"]
     sample = run["sample"]
 
@@ -605,11 +653,12 @@ def run_evaluation(args) -> int:
                     f"{[src.METHOD_LABELS[m] for m in methods]}")
 
     # --- 构建统一表达矩阵与空间权重 ---
-    expr_mat, W, gene_names, coords, labels, label_col = load_expr_and_coords(
-        run, args.knn)
+    expr_mat, W, gene_names, coords, labels, label_col, slice_ids, w_def_label = \
+        load_expr_and_coords(run, args.knn, args.w_def)
     moran_table = M.moran_geary_table(expr_mat, gene_names, W)
     has_labels = labels is not None
     n_clusters = int(len(set(labels))) if has_labels else 0
+    n_slices = len(set(slice_ids)) if slice_ids else 1
 
     # --- 逐方法计算指标 ---
     method_results = {}
@@ -790,6 +839,9 @@ def run_evaluation(args) -> int:
         "dataset": run["dataset"],
         "n_genes": int(len(gene_names)),
         "n_spots": int(expr_mat.shape[1]),
+        "dim": int(run.get("dim") or 2),
+        "n_slices": int(n_slices),
+        "w_def": w_def_label,
         "has_labels": has_labels,
         "label_col": label_col if has_labels else None,
         "methods": {
@@ -884,6 +936,8 @@ def main():
     ap.add_argument("--methods", default=None,
                     help="方法子集（逗号或空格分隔，默认全部）")
     ap.add_argument("--knn", type=int, default=6, help="Moran's I 近邻数（默认 6）")
+    ap.add_argument("--w-def", default="auto", choices=["auto", "iso", "slice"],
+                    help="空间权重定义（auto=3D+有切片用 slice，否则 iso；默认 auto）")
     ap.add_argument("--n-null", type=int, default=200,
                     help="随机对照置换次数（默认 200）")
     ap.add_argument("--n-baseline-draws", type=int, default=10,

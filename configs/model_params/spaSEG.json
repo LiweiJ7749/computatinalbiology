@@ -9,5 +9,6 @@
   "nConv": 2,
   "lr": 0.002,
   "weight_decay": 1e-5,
-  "seed": 1029
+  "seed": 1029,
+  "full_svg": false
 }

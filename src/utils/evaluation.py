@@ -202,12 +202,14 @@ def load_expr_and_coords(run: dict, knn: int, w_def: str = "auto"):
                 break
 
         # 类别标注（维度 4）。DLPFC 的标注在 obs['sce.layer_guess']（皮层分层 Layer1~6/WM），
-        # 故把它也纳入探测，否则 ARI/NMI/Region η² 这类下游指标会因无标注而缺失。
+        # Stereo-seq zebrafish 在 obs['seurat_clusters']/obs['bin_annotation']，故把它们也纳入探测；
+        # 只取有效（>1 类）的标注，否则 ARI/NMI/Region η² 这类下游指标会因无标注而缺失。
         labels = None
         label_col = None
-        for col in ("clusters", "cell_type", "leiden",
-                    "sce.layer_guess", "layer_guess"):
-            if col in adata.obs.columns and adata.obs[col].notna().any():
+        for col in ("clusters", "cell_type", "leiden", "sce.layer_guess", "layer_guess",
+                    "seurat_clusters", "bin_annotation", "layer_annotation"):
+            if col in adata.obs.columns and adata.obs[col].notna().any() \
+                    and adata.obs[col].nunique() > 1:
                 labels = adata.obs[col].iloc[spot_idx].astype(str).tolist()
                 label_col = col
                 src.log_message(f"发现类别标注列: obs['{col}']")

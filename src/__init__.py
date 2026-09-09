@@ -617,7 +617,15 @@ def _raw_counts_matrix(h5ad, tech=None):
             log_message(f"表达矩阵: 无 layers['{counts_src}']，回退 X（注意：可能不是原始 counts）")
     if not sparse.issparse(X):
         X = sparse.csr_matrix(X)
-    return X.astype(np.float64)
+    # 保持整数 counts 为整数 dtype，使 counts.mtx 以 "integer" 写出（体积更小、语义更准）；
+    # 仅当源为浮点（如已归一化表达）时才转 float64。部分平台（如 Stereo-seq zebrafish）把
+    # 整数 counts 存成 float64，这里在“所有非零值均为整数且不超 float 精确整数范围”时转回 int64。
+    if np.issubdtype(X.dtype, np.integer):
+        return X.tocsr()
+    d = X.data
+    if d.size and np.all(d == np.floor(d)) and float(d.max()) < 2 ** 53:
+        return X.astype(np.int64).tocsr()
+    return X.astype(np.float64).tocsr()
 
 
 def _write_r_format(counts_genes_spots, gene_names, barcodes,

@@ -39,6 +39,7 @@
 
   "Visium_HD_Human_Breast_Cancer": {
     "spark": { "option": "single" },
+    "spaseg": { "full_svg": true },
     "bin_factor": 8
   },
 
@@ -46,6 +47,7 @@
     "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
     "spagcn": { "n_clusters": null },
     "spark": { "option": "single" },
+    "spaseg": { "full_svg": true },
     "bin_factor": 8
   },
 

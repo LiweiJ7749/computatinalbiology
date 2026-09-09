@@ -91,6 +91,10 @@ def _resolve_inputs(args):
         src.log_message(f"使用前处理产物: {prepared}")
     else:
         src.log_message(f"未发现 {prepared}，回退读原始 h5ad: {run['h5ad']}")
+    # full_svg 优先级：命令行 --full-svg > 数据集级 run_params.spaseg.full_svg > 全局 spaSEG.json
+    spaseg_run = src.load_run_params(args.dataset or "").get("spaseg") or {}
+    full_svg = bool(args.full_svg or spaseg_run.get("full_svg")
+                    or _get_param("full_svg", False))
     params = dict(
         pca_dim=args.pca_dim or _get_param("pca_dim"),
         alpha=args.alpha if args.alpha is not None else _get_param("alpha"),
@@ -103,6 +107,7 @@ def _resolve_inputs(args):
         lr=_get_param("lr"),
         weight_decay=_get_param("weight_decay"),
         seed=_get_param("seed"),
+        full_svg=full_svg,
     )
     return h5ad_in, outdir, sample, params
 
@@ -330,15 +335,18 @@ def _detect_svgs_sparse(adata):
     return svg_df, adata
 
 
-def detect_svgs(adata):
+def detect_svgs(adata, force_full=False):
     # 处理仅含 1 个 spot 的域（wilcoxon 需要每组 >=2）
     adata = merge_small_domains(adata, min_size=2)
     # 单域无法做“域内 vs 域外”比较，vendor _ranks_svg 会因 out_groups 为空而崩溃
     if adata.obs["SpaSEG_clusters"].nunique() <= 1:
         src.log_message("空间域数量 <= 1，无法做域间差异 SVG 检测，返回空结果")
         return pd.DataFrame(), adata
-    if adata.n_obs > LARGE_N_SPOTS:
+    if adata.n_obs > LARGE_N_SPOTS and not force_full:
         return _detect_svgs_sparse(adata)
+    if adata.n_obs > LARGE_N_SPOTS:
+        src.log_message(f"大 spot 数据（{adata.n_obs} spots）但已启用完整 detect_svg，"
+                        "将做整矩阵 dense 化（需充足内存）")
 
     from downstream.svg import detect_svg  # noqa
 
@@ -484,6 +492,8 @@ def main():
                     help=f"正式迭代数（默认 config 或 {_DEFAULTS['iterations']}）")
     ap.add_argument("--position-max", type=float, default=None,
                     help=f"坐标缩放上限（默认 config 或 {_DEFAULTS['position_max']}）")
+    ap.add_argument("--full-svg", action="store_true",
+                    help="强制使用官方 detect_svg 完整过滤（默认大 spot 数据走轻量 rank_genes_groups）")
     args = ap.parse_args()
 
     t_start = time.time()
@@ -500,7 +510,7 @@ def main():
     # 3) SpaSEG 聚类
     adata = run_spaseg(adata, device, params)
     # 4) SVG 检测
-    svg_df, _adata = detect_svgs(adata)
+    svg_df, _adata = detect_svgs(adata, force_full=params.get("full_svg", False))
 
     # 5) 保存 CSV
     src.log_step(5, 6, "保存 SVG 结果")

@@ -92,7 +92,7 @@ def _pick_device(arg: str) -> str:
 # ---------------------------------------------------------------------------
 # 读取 + 表达预处理（SpaGCN 默认流程）
 # ---------------------------------------------------------------------------
-def load_and_prepare(h5ad_in: Path, device: str):
+def load_and_prepare(h5ad_in: Path, device: str, tech: str = ""):
     import anndata as ad
     import scanpy as sc
 
@@ -106,10 +106,11 @@ def load_and_prepare(h5ad_in: Path, device: str):
         coords = np.asarray(adata.obsm["spatial"], dtype=float)
         adata.obs["x"] = coords[:, 0]
         adata.obs["y"] = coords[:, 1]
-    # X 统一为真实 counts（若存在 raw_count 层），再做单次 normalize+log1p
-    if "raw_count" in adata.layers and adata.layers["raw_count"] is not None:
-        adata.X = adata.layers["raw_count"].copy()
-        src.log_message("X <- layers['raw_count']（真实 counts）")
+    # X 统一为真实 counts（按技术类型从 raw 层取：STARmap/MERFISH→raw_count，
+    # Stereo-seq→raw_counts，Stereo_seq_zf→counts，Visium/DLPFC→X），再做单次 normalize+log1p。
+    # 不能硬编码 raw_count，否则 Stereo-seq/zebrafish 会拿已归一化 X 再归一化一次。
+    adata.X = src._raw_counts_matrix(adata, tech=tech)
+    src.log_message("X <- 真实 counts（按 tech 从 raw 层取）")
 
     src.log_step(2, 6, "预处理（prefilter + normalize + log1p）")
     min_cells = PARAMS.get("min_cells", 3)
@@ -149,8 +150,10 @@ def _infer_n_clusters(adata):
     依次探测常见类别列；都没有则用 PARAMS 的默认值（configs/model_params/spaGCN.json
     的 n_clusters，缺省 9），并打印提示让用户用 --n-clusters 覆盖。
     """
-    for col in ("clusters", "cell_type", "leiden", "louvain", "celltype", "domain"):
-        if col in adata.obs.columns and adata.obs[col].notna().any():
+    for col in ("clusters", "cell_type", "leiden", "louvain", "celltype", "domain",
+                "seurat_clusters", "bin_annotation"):
+        if col in adata.obs.columns and adata.obs[col].notna().any() \
+                and adata.obs[col].nunique() > 1:
             n = int(adata.obs[col].nunique())
             src.log_message(f"使用类别列 obs['{col}'] 的类别数 {n} 作为域数")
             return n
@@ -369,7 +372,7 @@ def main():
     if str(spagcn_src) not in sys.path:
         sys.path.insert(0, str(spagcn_src))
 
-    adata, x_array, y_array, device = load_and_prepare(h5ad_in, device)
+    adata, x_array, y_array, device = load_and_prepare(h5ad_in, device, tech)
     adata, domains = train_domains(adata, x_array, y_array, device, args.n_clusters, tech)
 
     # 坐标列作为绘图用 x_name/y_name

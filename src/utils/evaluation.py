@@ -179,7 +179,8 @@ def load_expr_and_coords(run: dict, knn: int, w_def: str = "auto"):
         src.log_message(f"shape = {adata.shape} (spots x genes)")
 
         coords_df = src.load_coords(adata, run.get("spatial"), tech=run.get("tech"),
-                                    h5ad_path=h5ad_path, dim=dim)
+                                    h5ad_path=h5ad_path, dim=dim,
+                                    z_spacing=run.get("z_spacing"))
         keep = [b for b in adata.obs.index if b in coords_df.index]
         coord_cols = ["x", "y"] if dim == 2 else ["x", "y", "z"]
         coords = coords_df.loc[keep, coord_cols].to_numpy(dtype=np.float64)
@@ -216,8 +217,11 @@ def load_expr_and_coords(run: dict, knn: int, w_def: str = "auto"):
                 break
         del adata
 
-    W, w_def_label = M.spatial_weights(coords, k=knn, w_def=w_def, slice_ids=slice_ids)
-    src.log_message(f"空间权重 W = {w_def_label}（k={knn}）")
+    eff_w_def = w_def
+    if w_def == "auto" and run.get("w_def"):
+        eff_w_def = run["w_def"]
+    W, w_def_label = M.spatial_weights(coords, k=knn, w_def=eff_w_def, slice_ids=slice_ids)
+    src.log_message(f"空间权重 W = {w_def_label}（k={knn}，eff_w_def={eff_w_def}）")
     return expr_mat, W, gene_names, coords, labels, label_col, slice_ids, w_def_label
 
 
@@ -615,6 +619,21 @@ def plot_radar(method_results: dict, methods: list, top_k: int,
     plt.close(fig)
 
 
+def plot_k_robustness(rob_df: pd.DataFrame, out_path: Path) -> None:
+    """多 k 邻域稳健性折线图：显著 SVG 的中位 Moran's I 随 k 变化。"""
+    _setup_style()
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for m, sub in rob_df.groupby("method"):
+        ax.plot(sub["k"], sub["median_moran"], marker="o", ms=4,
+                color=_method_color(m), label=_method_label(m))
+    ax.set_xlabel("k (spatial neighbors)")
+    ax.set_ylabel("Median Moran's I of significant SVGs")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # 主编排
 # ---------------------------------------------------------------------------
@@ -804,6 +823,33 @@ def run_evaluation(args) -> int:
     rand_rows = [{"metric": k, "value": v} for k, v in baseline.items()]
     pd.DataFrame(rand_rows).to_csv(tables_dir / "random_baseline.csv", index=False)
 
+    # 9) 多 k 邻域稳健性（--knn-list）：显著 SVG 的中位 Moran's I 随 k 的稳定性
+    if args.knn_list:
+        knn_set = {int(x) for x in args.knn_list.split(",") if x.strip()}
+        knn_set.add(int(args.knn))
+        knn_list = sorted(knn_set)
+        if len(knn_list) > 1:
+            src.log_message(f"多 k 邻域稳健性: k = {knn_list}")
+            w_def_eff = "slice" if w_def_label == "slice" else "iso"
+            rob_rows = []
+            for k in knn_list:
+                mt = moran_table if k == args.knn else M.moran_geary_table(
+                    expr_mat, gene_names,
+                    M.spatial_weights(coords, k=k, w_def=w_def_eff,
+                                      slice_ids=slice_ids)[0])
+                for m in methods:
+                    sig = [g for g in rank_dfs[m].loc[rank_dfs[m]["padj"] < 0.05, "gene"]
+                           if g in mt.index]
+                    med = (float(np.nanmedian(mt.loc[sig, "moran_I"].to_numpy()))
+                           if sig else np.nan)
+                    rob_rows.append({"k": k, "method": m,
+                                     "n_sig": len(sig), "median_moran": med})
+            rob_df = pd.DataFrame(rob_rows)
+            rob_df.to_csv(tables_dir / "moran_k_robustness.csv", index=False)
+            if not args.no_figures:
+                plot_k_robustness(rob_df, figures_dir / "moran_k_stability.png")
+            src.log_message(f"已保存多 k 稳健性: {tables_dir / 'moran_k_robustness.csv'}")
+
     # --- 绘图（--no-figures 时跳过）---
     if not args.no_figures:
         src.log_message("生成图表 ...")
@@ -938,12 +984,14 @@ def main():
     ap.add_argument("--methods", default=None,
                     help="方法子集（逗号或空格分隔，默认全部）")
     ap.add_argument("--knn", type=int, default=6, help="Moran's I 近邻数（默认 6）")
+    ap.add_argument("--knn-list", default=None,
+                    help="多 k 邻域稳健性列表（逗号分隔，如 4,6,8,10,12；默认仅用 --knn）")
     ap.add_argument("--w-def", default="auto", choices=["auto", "iso", "slice"],
-                    help="空间权重定义（auto=3D+有切片用 slice，否则 iso；默认 auto）")
-    ap.add_argument("--n-null", type=int, default=200,
-                    help="随机对照置换次数（默认 200）")
-    ap.add_argument("--n-baseline-draws", type=int, default=10,
-                    help="随机基因基线抽样次数（默认 10）")
+                    help="空间权重定义（auto=优先数据集注册的 w_def；无则 3D+有切片用 slice，否则 iso）")
+    ap.add_argument("--n-null", type=int, default=1000,
+                    help="随机对照置换次数（默认 1000）")
+    ap.add_argument("--n-baseline-draws", type=int, default=50,
+                    help="随机基因基线抽样次数（默认 50）")
     ap.add_argument("--top-k-list", default="100,500,1000",
                     help="一致性/下游用的 top-K 列表（逗号分隔）")
     ap.add_argument("--seed", type=int, default=0, help="随机种子（默认 0）")

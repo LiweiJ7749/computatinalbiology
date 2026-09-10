@@ -386,6 +386,8 @@ def resolve_run(dataset=None, h5ad=None, spatial=None, outdir=None,
         "dim": dim,
         "methods": methods,
         "method_dirs": {m: out_root / METHOD_SUBDIRS[m] for m in methods},
+        "w_def": reg.get("w_def"),          # 3D 默认空间权重口径（iso/slice；None 走 auto）
+        "z_spacing": reg.get("z_spacing"),  # 切片 z 物理间距（µm）
     }
     if dim == 3:
         run["slices"] = slices
@@ -504,7 +506,8 @@ def locate_spatial(h5ad_path: Path, spatial_arg) -> tuple:
     return None, None
 
 
-def load_coords(h5ad, spatial_arg, tech=None, h5ad_path=None, dim=2) -> "pd.DataFrame":
+def load_coords(h5ad, spatial_arg, tech=None, h5ad_path=None, dim=2,
+                z_spacing=None) -> "pd.DataFrame":
     """读入坐标并与 h5ad 的 obs.index 对齐，返回 barcode 为索引的 DataFrame。
 
     按技术类型选择坐标来源（tech_profile 的 ``coords`` 字段）：
@@ -572,6 +575,10 @@ def load_coords(h5ad, spatial_arg, tech=None, h5ad_path=None, dim=2) -> "pd.Data
                 if zcol not in h5ad.obs.columns:
                     raise ValueError("dim=3 需要 obs['slice']（或 slice_ID）作为 z 切片索引")
                 z = h5ad.obs[zcol].astype(float).to_numpy()
+                # 切片序号 -> 物理 z（µm）：Stereo_seq_zf 的 z 只是 1..N 切片号，
+                # 需乘 z_spacing 才能与 x/y（µm）同尺度，否则 iso_3d 近邻会退化为 2D。
+                if z_spacing is not None and float(z_spacing) != 1.0:
+                    z = z * float(z_spacing)
                 return pd.DataFrame({"x": x, "y": y, "z": z}, index=h5ad.obs.index)
             return pd.DataFrame({"x": x, "y": y}, index=h5ad.obs.index)
         raise FileNotFoundError("技术类型要求 obs['spatial_x']/spatial_y，但 h5ad 中缺失")
@@ -896,6 +903,20 @@ def histology_source(run: dict):
     return tgz if tgz.exists() else None
 
 
+def _align_slideseq_slices(slices_coords, alignment):
+    """跨切片配准的预留实现点（PASTE / ICP 等）。
+
+    输入 ``slices_coords`` 为每个切片的 2D 坐标列表 (n_i x 2)，返回对齐后的
+    2D 坐标列表（可含每点连续 z）。当前未实现，接入真实配准后替换此函数：
+      - PASTE : `paste-bio/paste`（最优传输对齐，需安装 paste 包）
+      - ICP   : `open3d.pipelines.registration` 或 `trimesh`（点云刚体/非刚体配准）
+    未实现时调用方回退“简单堆叠”（z = 切片序号 * z_spacing）。
+    """
+    raise NotImplementedError(
+        f"Slide-seq 跨切片配准 alignment={alignment!r} 尚未实现，"
+        "回退简单堆叠；接入 PASTE/ICP 后在此实现。")
+
+
 def _load_slideseq_3d(slice_paths, z_spacing=1.0, alignment=None):
     """把 Slide-seq 的连续 2D 切片堆叠为 3D（2D→3D 重建）。
 
@@ -904,7 +925,7 @@ def _load_slideseq_3d(slice_paths, z_spacing=1.0, alignment=None):
     - 基因取各切片并集（首见顺序），缺失切片补 0。
     - barcode 加切片前缀保证跨切片唯一。
     - ``alignment``：真实跨切片配准（PASTE / ICP 等）的预留接口；当前仅支持简单堆叠，
-      传入非 None 时打印“尚未实现”并回退简单堆叠（见 docs/3d_svg_detection.md §6）。
+      传入非 None 时调用 ``_align_slideseq_slices``（未实现则回退简单堆叠，见 docs/3d_svg_detection.md §6）。
     """
     import numpy as np
     import pandas as pd
@@ -912,8 +933,10 @@ def _load_slideseq_3d(slice_paths, z_spacing=1.0, alignment=None):
     from scipy import sparse
 
     if alignment is not None:
-        log_message(f"Slide-seq 切片配准 alignment={alignment!r} 尚未实现，"
-                    "回退简单堆叠（z = 切片序号 * z_spacing）")
+        try:
+            _align_slideseq_slices(None, alignment)
+        except NotImplementedError as e:
+            log_message(str(e))
 
     slices_coords, slices_X, slices_genes, all_barcodes = [], [], [], []
     seen_genes = set()
@@ -962,7 +985,7 @@ def _preprocess_stereo3d(run):
     adata = ad.read_h5ad(run["h5ad"])
     log_message(f"shape = {adata.shape} (spots x genes)")
     tp = load_coords(adata, run.get("spatial"), tech=run.get("tech"),
-                     h5ad_path=run["h5ad"], dim=3)
+                     h5ad_path=run["h5ad"], dim=3, z_spacing=run.get("z_spacing"))
     log_message(f"对齐坐标后 spots = {len(tp)}")
     export_r_format(adata, tp, run["method_dirs"]["spark"],
                     tech=run.get("tech"), dim=3)

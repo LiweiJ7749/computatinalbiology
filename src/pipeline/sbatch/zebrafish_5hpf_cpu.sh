@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=zf5_cpu
-#SBATCH --partition=6126-24C-768G
+#SBATCH --partition=6240-36C-192G
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=24
+#SBATCH --ntasks-per-node=36
 #SBATCH --time=24:00:00
 #SBATCH -o zf5_cpu.%j.out
 #SBATCH -e zf5_cpu.%j.err
@@ -17,9 +17,9 @@ cd ~/svg_methods
 export PATH=$HOME/miniforge3/bin:$PATH
 export SVG_PYTHON=$HOME/svg_methods/envs/spatial/bin/python
 export SVG_RSCRIPT=$HOME/svg_methods/envs/spatial_R/bin/Rscript
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
-export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
-export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-24}
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-36}
+export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-36}
+export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-36}
 
 # 1) SPARK-X 原生 3D
 bash src/pipeline/models_benchmark.sh \

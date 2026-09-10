@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=stereo3d_cpu
-#SBATCH --partition=6126-24C-768G
+#SBATCH --partition=6240-36C-192G
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=24
+#SBATCH --ntasks-per-node=36
 #SBATCH --time=24:00:00
 #SBATCH -o stereo3d_cpu.%j.out
 #SBATCH -e stereo3d_cpu.%j.err

@@ -200,6 +200,7 @@ if [ -z "$SLICE_IDX" ] && [ "$SKIP_MERGE" -eq 0 ] && [ "$SKIP_EVAL" -eq 0 ]; the
   EVAL_METHODS="spark,spagcn,spaseg"
   "$PYTHON" "$ROOT/src/utils/evaluation.py" --dataset "$DATASET" --outdir "$OUTDIR" \
     --sample "$SAMPLE" --methods "$EVAL_METHODS" \
+    --n-null 1000 --n-baseline-draws 50 --knn-list 4,6,8,10,12 \
     2>&1 | tee -a "$OUTDIR/logs/evaluation.log" || \
     log_msg "[警告] evaluation.py 返回非零"
   "$PYTHON" "$ROOT/src/utils/spatial_svg_plots.py" --dataset "$DATASET" --outdir "$OUTDIR" \

@@ -57,7 +57,7 @@
   },
 
   "Stereo_seq_drosophila": {
-    "nnsvg": { "pcspots": 0.01, "ncounts": 3 },
+    "spark": { "option": "single" },
     "spagcn": { "n_clusters": null }
   },
 

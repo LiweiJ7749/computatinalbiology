@@ -93,6 +93,16 @@ def gene_color(gene: str):
 # ---------------------------------------------------------------------------
 # 数值与绘图辅助
 # ---------------------------------------------------------------------------
+def _gene_expr(expr_mat, i: int) -> np.ndarray:
+    """取 (genes x spots) 矩阵第 i 行，返回稠密 1D numpy（兼容稀疏/稠密）。"""
+    from scipy import sparse
+
+    row = expr_mat[i]
+    if sparse.issparse(row):
+        return np.asarray(row.toarray(), dtype=np.float64).ravel()
+    return np.asarray(row, dtype=np.float64).ravel()
+
+
 def _robust_scale(expr: np.ndarray) -> np.ndarray:
     """按 1%~99% 分位数把表达缩放到 [0,1]（恒定或含 NaN 时返回 0）。"""
     e = np.asarray(expr, dtype=np.float64)
@@ -233,7 +243,7 @@ def plot_top_expr(methods, top_genes, expr_mat, coords, gene_names,
         for c in range(top_n):
             ax = axes[r, c]
             if c < len(genes) and genes[c] in gidx:
-                expr = expr_mat[gidx[genes[c]]]
+                expr = _gene_expr(expr_mat, gidx[genes[c]])
                 sc = _draw_spatial(ax, coords, _robust_scale(expr),
                                    CMAP_CONT, s=s)
                 ax.set_title(genes[c], fontsize=9, style="italic",
@@ -271,7 +281,7 @@ def plot_dominant(methods, top_genes, expr_mat, coords, gene_names,
             _blank_cell(ax, "N/A")
             ax.set_title(src.METHOD_LABELS[m], fontsize=10)
             continue
-        mat = np.vstack([expr_mat[gidx[g]] for g in genes])          # genes x spots
+        mat = np.vstack([_gene_expr(expr_mat, gidx[g]) for g in genes])          # genes x spots
         z = (mat - mat.mean(axis=1, keepdims=True)) / \
             (mat.std(axis=1, keepdims=True) + 1e-12)
         dom = np.argmax(z, axis=0)
@@ -326,7 +336,7 @@ def plot_cross_method(methods, top_genes, expr_mat, coords, gene_names,
         for c, m in enumerate(methods):
             ax = axes[r, c]
             if g in top_genes[m] and g in gidx:
-                _draw_spatial(ax, coords, _robust_scale(expr_mat[gidx[g]]),
+                _draw_spatial(ax, coords, _robust_scale(_gene_expr(expr_mat, gidx[g])),
                               CMAP_CONT, s=s)
             else:
                 _blank_cell(ax, "×")
@@ -366,7 +376,7 @@ def plot_pattern_gallery(methods, top_genes, expr_mat, W, coords, gene_names,
                                  figsize=(3 * 2.4, len(genes) * 2.1),
                                  squeeze=False)
         for r, g in enumerate(genes):
-            e = expr_mat[gidx[g]]
+            e = _gene_expr(expr_mat, gidx[g])
             smooth = _smooth_expr(e, W)
             resid = e - smooth
             _draw_spatial(axes[r, 0], coords, _robust_scale(e), CMAP_CONT, s=s)
@@ -408,7 +418,7 @@ def plot_pattern_classify(methods, top_genes, expr_mat, W, coords, gene_names,
             if g in seen:
                 continue
             seen.add(g)
-            e = expr_mat[gidx[g]]
+            e = _gene_expr(expr_mat, gidx[g])
             xs.append(M.morans_i(e, W))
             ys.append(_gradient_r2(e, coords))
             labels.append(g)
@@ -505,7 +515,7 @@ def plot_unique_genes(methods, top_genes, expr_mat, coords, gene_names,
             ax = axes[r, c]
             if c < len(uniques[m]):
                 g = uniques[m][c]
-                _draw_spatial(ax, coords, _robust_scale(expr_mat[gidx[g]]),
+                _draw_spatial(ax, coords, _robust_scale(_gene_expr(expr_mat, gidx[g])),
                               CMAP_CONT, s=s)
                 ax.set_title(g, fontsize=9, style="italic", color=gene_color(g))
             else:
@@ -579,7 +589,7 @@ def plot_top_expr_3d(methods, top_genes, expr_mat, coords, gene_names,
         for c in range(top_n):
             ax = axes[r, c]
             if c < len(genes) and genes[c] in gidx:
-                v = _robust_scale(expr_mat[gidx[genes[c]]])
+                v = _robust_scale(_gene_expr(expr_mat, gidx[genes[c]]))
                 ax.scatter(coords[:, 0], coords[:, 1], coords[:, 2], c=v,
                            cmap=CMAP_CONT, s=max(s / 4.0, 0.5), linewidths=0,
                            rasterized=True, depthshade=False)
@@ -624,7 +634,7 @@ def plot_slice_grid_3d(methods, top_genes, expr_mat, coords, slice_ids,
                                  figsize=(len(slice_order) * 1.7, len(genes) * 1.7),
                                  squeeze=False)
         for r, g in enumerate(genes):
-            e = expr_mat[gidx[g]]
+            e = _gene_expr(expr_mat, gidx[g])
             v = _robust_scale(e)
             for c, sid in enumerate(slice_order):
                 ax = axes[r, c]

@@ -258,6 +258,9 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
     gene_effect = {}     # 基因 -> 取 min padj 那个域的 |log2(fold_change)|（无方向域间效应量）
 
     for dom in domains:
+        if sum(1 for p in pred if p == dom) < 2:
+            src.log_message(f"空间域 {dom} 仅含 <2 个 spot，跳过（Wilcoxon 需每组 ≥2）")
+            continue
         try:
             r = search_radius(target_cluster=dom, cell_id=cell_id, x=x, y=y,
                               pred=pred, start=start, end=end,

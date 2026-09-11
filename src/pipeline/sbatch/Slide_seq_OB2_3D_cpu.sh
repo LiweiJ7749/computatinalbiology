@@ -3,7 +3,7 @@
 #SBATCH --partition=6126-24C-768G
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=24
-#SBATCH --time=24:00:00
+#SBATCH --time=30:00:00
 #SBATCH -o slide3d_cpu.%j.out
 #SBATCH -e slide3d_cpu.%j.err
 

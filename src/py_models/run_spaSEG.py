@@ -172,6 +172,13 @@ def load_data(h5ad_in: Path):
     src.log_message(f"X 类型 = {type(adata.X).__name__}, max = {adata.X.max():.3f}")
     if "spatial" not in adata.obsm:
         raise ValueError("h5ad 缺少 obsm['spatial'] 坐标（先跑 src/preprocess/h5ad_preprocess.py）")
+    # SpaSEG 的 _spot_mapping 用 obs.index 的 reset_index() 列名做 merge(on=barcode_index)，
+    # 而 _add_seg_label 固定传 barcode_index="index"；若 obs.index.name 非空（如 Slide-seq
+    # 原始 h5ad 为 'spots'），reset_index 会生成 'spots' 列而非 'index'，导致 merge 抛
+    # KeyError: 'index'。barcode 名称本身不影响结果，统一清空索引名以匹配该约定。
+    if adata.obs.index.name is not None:
+        src.log_message(f"obs.index.name = {adata.obs.index.name!r} -> 置空（SpaSEG 要求）")
+        adata.obs.index.name = None
     src.log_message(f"坐标来源 = obsm['spatial'], 形状 = {adata.obsm['spatial'].shape}")
     return adata
 

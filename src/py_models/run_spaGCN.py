@@ -270,6 +270,14 @@ def detect_and_save(adata, domains, x_name, y_name, outdir, sample):
             nbr = find_neighbor_clusters(target_cluster=dom, cell_id=cell_id,
                                          x=x, y=y, pred=pred, radius=r,
                                          ratio=1 / 2)[0:3]
+            # rank_genes_groups 会把 label ∈ (nbr_list + [dom]) 的 spot 拆成「目标域 / 邻域」
+            # 两组做 Wilcoxon；邻域组若不足 2 个 spot，scanpy 会抛 TypeError
+            # （对整数类别做 ', '.join 拼错误信息）。与上面的单点域守卫同理，跳过该域。
+            n_nbr = sum(1 for p in pred if p in set(nbr))
+            if n_nbr < 2:
+                src.log_message(f"空间域 {dom} 的邻域仅 {n_nbr} 个 spot（<2），"
+                                "跳过（Wilcoxon 需每组 ≥2）")
+                continue
             de_info = rank_genes_groups(input_adata=adata, target_cluster=dom,
                                         nbr_list=nbr, label_col="refined_pred",
                                         adj_nbr=True, log=True)

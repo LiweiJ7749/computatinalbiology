@@ -65,6 +65,26 @@ def _perm_dir(run, method, idx):
     return run["outdir"] / "permutations" / method / f"perm_{idx}"
 
 
+def _run_nnsvg(data_dir, sample, dataset=None):
+    """运行 nnSVG（R），注入数据集级过滤参数（与 models_benchmark.sh 一致）。"""
+    rscript, env = _r_env()
+    params = src.load_run_params(dataset) if dataset else {}
+    nnsvg = params.get("nnsvg", {})
+    env["NNSVG_PCSPOTS"] = str(nnsvg.get("pcspots", 0.01))
+    env["NNSVG_NCOUNTS"] = str(nnsvg.get("ncounts", 3))
+    src.log_message(f"运行 nnSVG 于 {data_dir} "
+                    f"(pcspots={env['NNSVG_PCSPOTS']}, ncounts={env['NNSVG_NCOUNTS']})")
+    p = subprocess.run(
+        [rscript, str(ROOT / "src/r_models/run_nnSVG.r"), str(data_dir), sample],
+        cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if p.returncode != 0:
+        raise RuntimeError(f"nnSVG 返回非零: {p.returncode}")
+    rank = pd.read_csv(data_dir / f"SVG_nnSVG_{sample}_rank.csv")
+    n_sig = int((rank["padj"] < 0.05).sum())
+    return n_sig, int(len(rank))
+
+
 def _permute_slice_coords(adata, rng, method):
     """在单个 2D 切片内打乱坐标（保持表达/切片归属/标注不变）。
 
@@ -82,34 +102,43 @@ def _permute_slice_coords(adata, rng, method):
     return adata
 
 
-def _run_method_script(method, h5ad: Path, outdir: Path, sample: str, device: str):
+def _run_method_script(method, h5ad: Path, outdir: Path, sample: str, device: str,
+                       dataset=None):
     py = src.find_python()
     script = ROOT / "src/py_models" / f"run_{src.METHOD_SUBDIRS[method]}.py"
-    src.log_message(f"运行 {method} 切片 {sample}")
+    cmd = [py, str(script), "--h5ad", str(h5ad), "--outdir", str(outdir),
+           "--sample", sample, "--device", device]
+    if dataset:
+        cmd += ["--dataset", str(dataset)]
+    src.log_message(f"运行 {method} {sample}"
+                    + (f" (dataset={dataset})" if dataset else ""))
     p = subprocess.run(
-        [py, str(script), "--h5ad", str(h5ad), "--outdir", str(outdir),
-         "--sample", sample, "--device", device],
-        cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cmd, cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     if p.returncode != 0:
         raise RuntimeError(f"{method} 返回非零: {p.returncode}")
 
 
-def _run_one_spark(run, idx, seed):
-    src_dir = run["method_dirs"]["spark"]
+def _run_one_r_2d(run, method, idx, seed):
+    """2D R 方法（spark/nnsvg）坐标置换：打乱 location.csv 行（barcode-坐标对应）。"""
+    src_dir = run["method_dirs"][method]
     loc = pd.read_csv(src_dir / "location.csv", index_col=0)
     # 置换：打乱坐标行（barcode 与坐标的对应关系），表达/基因不变
     loc_perm = loc.sample(frac=1.0, random_state=seed)
     loc_perm.index = loc.index
 
-    out = _perm_dir(run, "spark", idx)
+    out = _perm_dir(run, method, idx)
     out.mkdir(parents=True, exist_ok=True)
     for f in ("counts.mtx", "genes.csv", "barcodes.csv"):
         tgt = out / f
         if not tgt.exists():
             os.symlink(src_dir / f, tgt)
     loc_perm.to_csv(out / "location.csv", index_label="barcode")
-    return _run_sparkx(out, run["sample"])
+    if method == "spark":
+        return _run_sparkx(out, run["sample"])
+    if method == "nnsvg":
+        return _run_nnsvg(out, run["sample"], run.get("dataset"))
+    raise NotImplementedError(f"未实现 R 方法 {method}")
 
 
 def _run_one_slice(run, method, idx, seed, device):
@@ -149,11 +178,46 @@ def _run_one_slice(run, method, idx, seed, device):
     return n_sig, int(len(merged))
 
 
+def _run_one_2d_method(run, method, idx, seed, device):
+    """2D Python 方法（spagcn/spaseg）坐标置换：打乱 h5ad 坐标列后重跑。"""
+    import anndata as ad
+
+    sub = src.METHOD_SUBDIRS[method]
+    sample = run["sample"]
+    src_h5ad = run["method_dirs"][method] / f"{sample}_{sub}.h5ad"
+    if not src_h5ad.exists():
+        raise FileNotFoundError(f"缺少已前处理的 2D h5ad: {src_h5ad}")
+
+    out = _perm_dir(run, method, idx)
+    out.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+
+    a = ad.read_h5ad(src_h5ad)
+    _permute_slice_coords(a, rng, method)
+    dst_h5ad = out / f"{sample}_{sub}.h5ad"
+    a.write(dst_h5ad)
+    del a
+
+    # 2D 场景传 dataset，保证 tech（如 DLPFC 的 hexagon refine）与真实运行一致；
+    # 3D 逐切片不走这里（resolve_run 会因 dim=3 过滤方法）。
+    _run_method_script(method, dst_h5ad, out, sample, device, dataset=run.get("dataset"))
+
+    rank_path = out / sub / f"SVG_{sub}_{sample}_rank.csv"
+    if not rank_path.exists():
+        raise FileNotFoundError(f"未找到置换结果 rank CSV: {rank_path}")
+    rank = pd.read_csv(rank_path)
+    n_sig = int((rank["padj"] < 0.05).sum())
+    return n_sig, int(len(rank))
+
+
 def run_one(run, method, idx, seed, device="auto"):
-    if method == "spark":
-        n_sig, n_genes = _run_one_spark(run, idx, seed)
+    if method in ("spark", "nnsvg"):
+        n_sig, n_genes = _run_one_r_2d(run, method, idx, seed)
     elif method in ("spagcn", "spaseg"):
-        n_sig, n_genes = _run_one_slice(run, method, idx, seed, device)
+        if int(run.get("dim") or 2) == 3:
+            n_sig, n_genes = _run_one_slice(run, method, idx, seed, device)
+        else:
+            n_sig, n_genes = _run_one_2d_method(run, method, idx, seed, device)
     else:
         raise NotImplementedError(f"未实现 method={method} 的坐标置换 FPR")
 
@@ -197,8 +261,9 @@ def main():
     ap.add_argument("--h5ad", default=None, help="输入 h5ad（覆盖 dataset）")
     ap.add_argument("--outdir", default=None, help="输出根目录")
     ap.add_argument("--sample", default=None, help="样本标签")
-    ap.add_argument("--method", default="spark", choices=["spark", "spagcn", "spaseg"],
-                    help="方法（spark/spagcn/spaseg）")
+    ap.add_argument("--method", default="spark",
+                    choices=["spark", "nnsvg", "spagcn", "spaseg"],
+                    help="方法（spark/nnsvg/spagcn/spaseg）")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"],
                     help="spagcn/spaseg 训练设备（默认 auto）")
     ap.add_argument("--n-perms", type=int, default=10, help="顺序模式置换次数（默认 10）")

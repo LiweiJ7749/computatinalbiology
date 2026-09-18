@@ -624,6 +624,14 @@ def _raw_counts_matrix(h5ad, tech=None):
             log_message(f"表达矩阵: 无 layers['{counts_src}']，回退 X（注意：可能不是原始 counts）")
     if not sparse.issparse(X):
         X = sparse.csr_matrix(X)
+    X = X.tocsr()
+    # 清洗非有限值（如 MERFISH 探针缺失哨兵 NaN）：置 0，避免污染 counts.mtx 与下游 Moran。
+    # 若不清洗，NaN 会经 library-size 归一化扩散到整行，使 morans_i/gearys_c 全部返回 NaN。
+    if X.nnz and not np.all(np.isfinite(X.data)):
+        n_bad = int((~np.isfinite(X.data)).sum())
+        log_message(f"清洗 {n_bad} 个非有限 counts（置 0，通常为探针缺失哨兵 NaN）")
+        X.data[~np.isfinite(X.data)] = 0.0
+        X.eliminate_zeros()
     # 保持整数 counts 为整数 dtype，使 counts.mtx 以 "integer" 写出（体积更小、语义更准）；
     # 仅当源为浮点（如已归一化表达）时才转 float64。部分平台（如 Stereo-seq zebrafish）把
     # 整数 counts 存成 float64，这里在“所有非零值均为整数且不超 float 精确整数范围”时转回 int64。

@@ -124,6 +124,14 @@ def _norm_log1p(X):
         X = sparse.csr_matrix(X, dtype=np.float64)
     else:
         X = X.astype(np.float64).tocsr()
+    # 非有限值（NaN/Inf）清洗：计数不应为 NaN/Inf（如 MERFISH 探针缺失哨兵）。
+    # 若不清洗，NaN 会经 library-size 归一化（1e4/totals）扩散到整行，
+    # 使 morans_i/gearys_c 因 np.all(np.isfinite(x)) 不通过而全部返回 NaN。
+    if X.nnz and not np.all(np.isfinite(X.data)):
+        n_bad = int((~np.isfinite(X.data)).sum())
+        src.log_message(f"[_norm_log1p] 检测到 {n_bad} 个非有限计数，置 0 以阻止 NaN 扩散")
+        X.data[~np.isfinite(X.data)] = 0.0
+        X.eliminate_zeros()
     totals = np.asarray(X.sum(axis=1)).ravel()
     totals[totals == 0] = 1.0
     X_norm = (sparse.diags(1e4 / totals) @ X).tocsr()

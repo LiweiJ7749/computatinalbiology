@@ -28,6 +28,15 @@
 > 3D 数据（如 stereo-seq、Slide-seq 堆叠切片）目前仅 SPARK-X 支持（其 `locus` 为
 > `n × d`，天然支持任意维坐标）。
 
+## 快速体验（Notebook 示例）
+
+[notebooks/mouse_brain_STARmap_demo.ipynb](notebooks/mouse_brain_STARmap_demo.ipynb)
+以 `mouse_brain_STARmap`（STARmap 小鼠大脑皮层，930 spots × 996 genes）为示例，
+端到端展示「数据集注册 → 输入浏览 → 四方法流水线 → 统一评估 → 结果可视化」的完整流程；
+跑通后可把 `DATASET` 换成 `configs/datasets.json` 中任意 key 复用同一套分析。
+
+运行前先构建环境（见下），建议用 `envs/spatial/bin/python` 作为该 Notebook 的 kernel。
+
 ## 运行环境（Linux / HPC 原生）
 
 | 环境（项目内前缀） | 用途 | 包管理 |
@@ -161,21 +170,22 @@ HPC 各数据集与脚本的对应关系、队列选择见下方「HPC 提交说
 
 ## 数据集
 
-`configs/datasets.json` 注册的数据集 key（共 19 个），按运行位置划分：
+`configs/datasets.json` 注册的数据集 key（共 23 个），按运行位置划分：
 
 ### 本地运行（小规模）
 
 | key | 技术 / 维度 |
 |---|---|
-| mouse_brain_STARmap | STARmap / 2D（默认） |
+| mouse_brain_STARmap | STARmap / 2D（默认，示例 Notebook） |
 | STARmap_AD_13m_ctrl_rep1 / rep2 | STARmap / 2D |
 | STARmap_AD_13m_disease_rep1 / rep2 | STARmap / 2D |
 | STARmap_AD_8m_ctrl_rep1 / rep2 | STARmap / 2D |
 | STARmap_AD_8m_disease_rep1 / rep2 | STARmap / 2D |
 | Visium_Mouse_Olfactory_Bulb | Visium / 2D |
 | DLPFC_151507 / 151508 / 151509 | 10x Visium / 2D |
+| Stereo_seq_drosophila_test | stereo-seq / 3D（冒烟测试子集，仅 SPARK-X） |
 
-### HPC 运行（大规模）
+### HPC 运行（大规模 / 3D 重建）
 
 | key | 技术 / 维度 | 说明 |
 |---|---|---|
@@ -184,7 +194,8 @@ HPC 各数据集与脚本的对应关系、队列选择见下方「HPC 提交说
 | Visium_HD_Human_Breast_Cancer | Visium HD / 2D | 需先在 HPC 转换 feature_slice.h5 |
 | MERFISH_Moffitt | MERFISH / 2D | 103 万 spot |
 | Stereo_seq_drosophila | stereo-seq / 3D | 仅 SPARK-X |
-| Slide_seq_OB2_3D | Slide-seq / 3D | 仅 SPARK-X，3D 重建待实现 |
+| zebrafish_3hpf / 5hpf / 10hpf | stereo-seq / 3D | 逐切片检测 + 合并（SpaGCN/SpaSEG 走 3D 切片流水线） |
+| Slide_seq_OB2_3D | Slide-seq / 3D | 20 切片堆叠重建，仅 SPARK-X |
 
 ## 项目结构
 
@@ -198,9 +209,10 @@ HPC 各数据集与脚本的对应关系、队列选择见下方「HPC 提交说
 │   ├── datasets.json                  # 数据集注册表
 │   ├── run_params.json                # 每数据集的差异化运行参数（nnSVG 过滤/SpaGCN 域数等）
 │   └── model_params/                  # 各方法超参数
-├── data/                              # 输入 h5ad（各技术子目录）
+├── notebooks/                         # 示例 Notebook（mouse_brain_STARmap_demo.ipynb）
+├── data/                              # 输入 h5ad（各技术子目录；仅示例 h5ad 入库）
 ├── envs/                              # conda 前缀（gitignore，由 setup 脚本重建）
-├── results/local_results/             # 输出（每数据集一目录）
+├── results/local_results/             # 输出（每数据集一目录，gitignore）
 └── src/
     ├── __init__.py                    # 路径/常量/数据集注册/共同前处理核心
     ├── pipeline/

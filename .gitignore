@@ -1,7 +1,12 @@
 .vscode
 paper_material
 presentation
-data
+data/*
+!data/STARmap/
+data/STARmap/*
+!data/STARmap/mouse_brain_cortex/
+data/STARmap/mouse_brain_cortex/*
+!data/STARmap/mouse_brain_cortex/mouse_brain_STARmap_processed.h5ad
 results
 docs
 envs/
